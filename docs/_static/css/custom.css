@@ -1,0 +1,170 @@
+/* ==========================================================================
+   AmbiDose documentation theme polish (on top of sphinx_book_theme).
+   Goals: cleaner notebook rendering, readable DataFrame tables, tasteful
+   accent color, and a consistent "tutorial header" card. Light + dark aware.
+   ========================================================================== */
+
+:root {
+  --scad-accent: #2a7f8e;      /* teal */
+  --scad-accent-2: #3d5a80;    /* slate blue */
+  --scad-accent-soft: #e6f2f4;
+  --scad-code-bg: #f7f9fb;
+  --scad-code-border: #e3e8ee;
+  --scad-table-head: #eef3f6;
+  --scad-table-stripe: #f7fafb;
+  --scad-table-border: #dce3ea;
+}
+
+html[data-theme="dark"] {
+  --scad-accent: #56b6c2;
+  --scad-accent-2: #7aa2c9;
+  --scad-accent-soft: #17313a;
+  --scad-code-bg: #1b1f24;
+  --scad-code-border: #2c333c;
+  --scad-table-head: #222831;
+  --scad-table-stripe: #1c2126;
+  --scad-table-border: #2c333c;
+}
+
+/* -- Content width / base type ------------------------------------------- */
+.bd-main .bd-content {
+  max-width: 88rem;
+}
+.bd-article {
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+/* -- Headings: give sections a clear visual rhythm ----------------------- */
+.bd-article h1 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  padding-bottom: 0.3em;
+  border-bottom: 3px solid var(--scad-accent);
+}
+.bd-article h2 {
+  font-weight: 650;
+  margin-top: 2.2em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--scad-code-border);
+}
+.bd-article h3 {
+  font-weight: 600;
+  margin-top: 1.6em;
+  color: var(--scad-accent-2);
+}
+
+/* -- Notebook code input cells: rounded, subtle accent rail -------------- */
+.cell .cell_input,
+div.nboutput div.input_area,
+div.nbinput div.input_area {
+  border: 1px solid var(--scad-code-border);
+  border-left: 3px solid var(--scad-accent);
+  border-radius: 8px;
+  background: var(--scad-code-bg);
+  overflow: hidden;
+}
+.cell .cell_input div.highlight,
+.cell .cell_input pre {
+  background: transparent !important;
+  margin: 0;
+}
+.cell {
+  margin-top: 1.1em;
+  margin-bottom: 1.1em;
+}
+
+/* -- Notebook outputs: breathing room + framed figures ------------------- */
+.cell_output {
+  margin-top: 0.5em;
+  padding-left: 0.2em;
+}
+.cell_output img,
+.cell_output .output img {
+  border-radius: 6px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
+  max-width: 100%;
+  height: auto;
+}
+/* stdout / stderr streams: quieter, monospace block */
+.cell_output pre {
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+
+/* -- DataFrame tables: the single biggest readability win ---------------- */
+.cell_output table.dataframe {
+  border-collapse: collapse;
+  border: 1px solid var(--scad-table-border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 0.84em;
+  font-variant-numeric: tabular-nums;
+  margin: 0.4em 0;
+}
+.cell_output table.dataframe thead th {
+  background: var(--scad-table-head);
+  color: var(--scad-accent-2);
+  font-weight: 600;
+  border-bottom: 2px solid var(--scad-accent);
+  padding: 6px 12px;
+  text-align: right;
+}
+.cell_output table.dataframe tbody th {
+  background: var(--scad-table-head);
+  font-weight: 600;
+}
+.cell_output table.dataframe td {
+  padding: 5px 12px;
+  border-top: 1px solid var(--scad-table-border);
+}
+.cell_output table.dataframe tbody tr:nth-child(even) td {
+  background: var(--scad-table-stripe);
+}
+.cell_output table.dataframe tbody tr:hover td {
+  background: var(--scad-accent-soft);
+}
+
+/* horizontal scroll only inside wide outputs, never the page body */
+.cell_output .output_area,
+.cell_output {
+  overflow-x: auto;
+}
+
+/* -- Admonitions: warmer note/tip/see-also accents ----------------------- */
+.bd-article .admonition {
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+.bd-article .admonition.note {
+  border-left-color: var(--scad-accent);
+}
+.bd-article .admonition.tip,
+.bd-article .admonition.hint {
+  border-left-color: #2e8b57;
+}
+
+/* -- sphinx-design cards used in tutorial headers ------------------------ */
+.sd-card {
+  border-radius: 10px;
+  border: 1px solid var(--scad-code-border);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+.sd-card:hover {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+.sd-card .sd-card-title {
+  color: var(--scad-accent-2);
+}
+
+/* Compact "at a glance" header grid (custom class used in notebooks) */
+.scat-meta .sd-card-body {
+  padding: 0.8rem 1rem;
+  font-size: 0.9em;
+}
+
+/* -- copybutton + misc --------------------------------------------------- */
+button.copybtn {
+  border-radius: 5px;
+}

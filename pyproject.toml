@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ambidose"
+dynamic = ["version"]
+description = "Per-cell ambient dose removal for droplet scRNA-seq, using empty droplets to pin soup composition"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Zhao Li (李钊)", email = "leelieber@gmail.com"}
+]
+keywords = [
+    "single-cell",
+    "RNA-seq",
+    "ambient RNA",
+    "empty droplets",
+    "background removal",
+    "bioinformatics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+dependencies = [
+    "anndata>=0.8,<0.14",
+    "numpy>=1.23",
+    "pandas>=1.3",
+    "scipy>=1.7",
+    "h5py>=3.0",
+    "scanpy>=1.10",
+    "scikit-learn>=1.0",
+    "scikit-image>=0.19",
+    "threadpoolctl>=3.0",
+    "igraph>=0.10",
+    "scfair>=0.7",
+]
+
+[project.optional-dependencies]
+baselines = [
+    "scvi-tools>=1.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.4.0,<0.17",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-book-theme>=1.1",
+    "myst-nb>=1.0",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.5",
+]
+
+[project.scripts]
+ambidose = "ambidose.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/leelieber2025/AmbiDose"
+Documentation = "https://ambidose.readthedocs.io"
+Changelog = "https://ambidose.readthedocs.io/en/latest/changelog.html"
+Source = "https://github.com/leelieber2025/AmbiDose"
+Issues = "https://github.com/leelieber2025/AmbiDose/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ambidose = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = {attr = "ambidose._version.__version__"}
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["scripts", "draft", "docs", "data", "archive"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ambidose"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --tb=short"

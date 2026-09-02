@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+title: "AmbiDose: per-cell ambient dose removal for droplet scRNA-seq"
+message: >-
+  If you use this software, please cite it using the metadata below.
+type: software
+authors:
+  - family-names: "Li"
+    given-names: "Zhao (李钊)"
+    email: "leelieber@gmail.com"
+    orcid: "https://orcid.org/0000-0002-9276-9129"
+repository-code: "https://github.com/leelieber2025/AmbiDose"
+url: "https://ambidose.readthedocs.io"
+license: Apache-2.0
+version: 0.3.0
+date-released: "2026-09-02"
+keywords:
+  - single-cell
+  - RNA-seq
+  - ambient RNA
+  - empty droplets
+  - background removal
+  - bioinformatics
