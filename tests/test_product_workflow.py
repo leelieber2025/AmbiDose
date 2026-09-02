@@ -678,18 +678,23 @@ def test_coarse_leiden_resolution_is_locked():
     assert _resolve_coarse_resolution(adata, droplet_key=DROPLET_KEY, cell_label="cell") == 0.35
 
 
-def test_typing_fast_is_noop_below_cell_threshold():
-    from ambidose.pp import CLUSTER_KEY, DROPLET_KEY, resolve_type_key
+def test_typing_fast_is_noop_below_cell_threshold(monkeypatch):
+    from ambidose.pp import CLUSTER_KEY, DROPLET_KEY, _embed_coarse_hvg, resolve_type_key
 
+    seen: list[bool] = []
+    orig = _embed_coarse_hvg
+
+    def wrapped(sub, *, typing_fast):
+        seen.append(bool(typing_fast))
+        return orig(sub, typing_fast=typing_fast)
+
+    monkeypatch.setattr("ambidose.pp._embed_coarse_hvg", wrapped)
     adata = make_toy(n_samples=1, n_empty=40, n_cells=80, n_genes=50, seed=4)
     adata.obs[DROPLET_KEY] = adata.obs["droplet"].astype(str)
-    auto = adata.copy()
-    full = adata.copy()
-    resolve_type_key(auto)
-    resolve_type_key(full, typing_fast=False)
-    assert CLUSTER_KEY in auto.obs and CLUSTER_KEY in full.obs
-    assert (auto.obs[CLUSTER_KEY].astype(str) == full.obs[CLUSTER_KEY].astype(str)).all()
-    clustering = auto.uns.get("ambidose", {}).get("clustering", {})
+    resolve_type_key(adata)
+    assert CLUSTER_KEY in adata.obs
+    assert seen == [False]
+    clustering = adata.uns.get("ambidose", {}).get("clustering", {})
     assert clustering.get("typing_fast") in (False, None)
 
 

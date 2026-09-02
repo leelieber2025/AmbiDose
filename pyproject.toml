@@ -103,3 +103,8 @@ minversion = "7.0"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q --tb=short"
+filterwarnings = [
+    "ignore:zero-centering a sparse array/matrix densifies it:UserWarning",
+    "ignore:Variable names are not unique:UserWarning",
+    "ignore:Some cells have zero counts:UserWarning",
+]
