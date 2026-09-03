@@ -2,10 +2,11 @@
 
 Recommended usage::
 
+    import scanpy as sc
     import ambidose as amdose
-    adata = amdose.read_10x_h5("raw_feature_bc_matrix.h5")
-    amdose.denoise(adata, cell_barcodes="filtered_barcodes.tsv")
-    amdose.write_report(adata, "report.html")
+
+    adata = sc.read_10x_mtx("filtered_feature_bc_matrix/")
+    adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
 
 ``denoise()`` is the product entry. ``classify_droplets``, ``estimate_chi``,
 ``estimate_dose``, and ``subtract`` are steps inside that path, not alternate

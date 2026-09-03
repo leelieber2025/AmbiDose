@@ -17,6 +17,7 @@ Install AmbiDose in a Python 3.10–3.13 environment (conda is convenient next t
 conda create -n ambidose python=3.12
 conda activate ambidose
 pip install ambidose
+# or: conda install -c conda-forge -c bioconda ambidose
 ambidose --version
 ```
 

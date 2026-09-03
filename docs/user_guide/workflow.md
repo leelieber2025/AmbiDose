@@ -6,7 +6,7 @@ The product path is `denoise()`, then `write_report()` (or CLI `--report`). `cla
 
 The completed product output keeps a small public schema: `obs` contains `ambidose_droplet`, the final `ambidose_d` and `ambidose_rho`, `ambidose_removed_umi`, and `ambidose_rho_trust`; automatic typing also adds `ambidose_cluster`. Estimator-specific working columns are removed before `denoise()` returns. `var` stores the ambient profile and per-gene removal, while `uns["ambidose"]` stores run-level summaries.
 
-Two calling conventions: `denoise(raw_adata, cell_barcodes=...)` mutates and returns the raw+empty-droplet object you loaded yourself (the form the rest of this page describes); `denoise(filtered_adata, raw=...)` instead takes your own already-filtered, cells-only object as `adata`, uses its `obs_names` as the whitelist, and returns a denoised, barcode/gene-aligned copy of that same object (see {doc}`../quickstart`). The two are mutually exclusive (`raw=` and `cell_barcodes=` cannot both be given) and produce identical results for the same underlying data.
+The usual Python call is `denoise(filtered_adata, raw=...)`: `adata` is your cells-only object (e.g. from `sc.read_10x_mtx`), `raw=` is the matching unfiltered matrix, and a denoised copy of `adata` is returned. `denoise(raw_adata, cell_barcodes=...)` is the lower-level form: it mutates the raw+empty-droplet object you loaded yourself. The two are mutually exclusive and produce identical results for the same data. See {doc}`../quickstart`. The rest of this page describes the internals of that shared path.
 
 ## Raw counts are required
 

@@ -6,6 +6,7 @@
 [![Conda downloads](https://img.shields.io/conda/dn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
 [![Python versions](https://img.shields.io/pypi/pyversions/ambidose.svg)](https://pypi.org/project/ambidose/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/leelieber2025/AmbiDose/blob/main/LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22278199.svg)](https://doi.org/10.5281/zenodo.22278199)
 
 ## What AmbiDose does
 
@@ -47,18 +48,6 @@ AmbiDose does **not** infer a generative count posterior, integrate batches, or 
 ### Default Python call
 
 ```python
-import ambidose as amdose
-
-adata = amdose.read_10x_h5("raw_feature_bc_matrix.h5")
-cell_barcodes = amdose.read_10x_barcodes("filtered_feature_bc_matrix.h5")
-amdose.denoise(adata, cell_barcodes=cell_barcodes)
-
-counts = adata.X  # denoised; original input is in layers["raw_counts"]
-```
-
-If you already loaded your own filtered, cells-only object the usual scanpy way, pass the matching raw matrix as `raw=` instead -- `adata`'s own barcodes become the whitelist, and a denoised copy of that same `adata` is returned:
-
-```python
 import scanpy as sc
 import ambidose as amdose
 
@@ -67,6 +56,10 @@ adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
 
 counts = adata.X  # denoised; original input is in layers["raw_counts"]
 ```
+
+`adata`'s barcodes are the cell whitelist. `raw=` is the matching unfiltered matrix (empty droplets for χ). The call returns a new copy; it does not mutate the object you passed in.
+
+The whitelist-first form (load the raw matrix yourself, pass `cell_barcodes=`) is in {doc}`quickstart`.
 
 ### Default CLI call
 
