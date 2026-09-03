@@ -1,6 +1,8 @@
 # AmbiDose
 
 [![PyPI version](https://img.shields.io/pypi/v/ambidose.svg)](https://pypi.org/project/ambidose/)
+[![Bioconda](https://img.shields.io/conda/vn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
+[![Conda downloads](https://img.shields.io/conda/dn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
 [![Python versions](https://img.shields.io/pypi/pyversions/ambidose.svg)](https://pypi.org/project/ambidose/)
 [![Documentation](https://readthedocs.org/projects/ambidose/badge/?version=latest)](https://ambidose.readthedocs.io/en/latest/)
 [![CI](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml/badge.svg)](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml)
@@ -17,6 +19,7 @@ Docs: [Read the Docs](https://ambidose.readthedocs.io/en/latest/).
 
 ```bash
 pip install ambidose
+# or: conda install -c conda-forge -c bioconda ambidose
 ```
 
 Python 3.10–3.13. A GPU is not required. Details:

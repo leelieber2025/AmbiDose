@@ -12,6 +12,8 @@ A GPU is not required.
 
 ```bash
 pip install ambidose
+# or
+conda install -c conda-forge -c bioconda ambidose
 ```
 
 `pip` installs scFair with AmbiDose. Optional comparison baselines that use scVI-tools are separate:
