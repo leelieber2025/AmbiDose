@@ -8,6 +8,7 @@
 [![Documentation](https://readthedocs.org/projects/ambidose/badge/?version=latest)](https://ambidose.readthedocs.io/en/latest/)
 [![CI](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml/badge.svg)](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22278199.svg)](https://doi.org/10.5281/zenodo.22278199)
 
 **AmbiDose** removes ambient RNA from droplet scRNA-seq. Empty droplets
 estimate the soup profile χ; each cell gets an operational dose
@@ -61,6 +62,7 @@ ambidose denoise --input /path/to/outs --output cleaned.h5ad
 ## Citation
 
 Pin the package version used in the analysis, for example `ambidose==0.3.0`.
+Software record: [10.5281/zenodo.22278199](https://doi.org/10.5281/zenodo.22278199).
 See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/latest/citation.html).
 
 ```bibtex
@@ -69,7 +71,8 @@ See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/la
   author  = {Li, Zhao},
   year    = {2026},
   version = {0.3.0},
-  url     = {https://github.com/leelieber2025/AmbiDose},
+  doi     = {10.5281/zenodo.22278199},
+  url     = {https://doi.org/10.5281/zenodo.22278199},
 }
 ```
 

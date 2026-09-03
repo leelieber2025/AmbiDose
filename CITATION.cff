@@ -10,6 +10,12 @@ authors:
     orcid: "https://orcid.org/0000-0002-9276-9129"
 repository-code: "https://github.com/leelieber2025/AmbiDose"
 url: "https://ambidose.readthedocs.io"
+doi: 10.5281/zenodo.22278199
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22278199
+    description: >-
+      Concept DOI representing all versions; always resolves to the latest release.
 license: Apache-2.0
 version: 0.3.0
 date-released: "2026-09-02"
