@@ -1,5 +1,5 @@
 {% set name = "ambidose" %}
-{% set version = "0.3.0" %}
+{% set version = "0.3.1" %}
 
 package:
   name: {{ name }}
@@ -7,7 +7,7 @@ package:
 
 source:
   url: https://pypi.io/packages/source/{{ name[0] }}/{{ name }}/{{ name }}-{{ version }}.tar.gz
-  sha256: 303f086cf54f9ff986edf55c2f06f88a5aa27f5d24da82d67d0f21f245217969
+  sha256: 491b5f5ad585cff6edd3a3947715f65952fb787ea9090630b07fafd59ecd7a06
 
 build:
   number: 0

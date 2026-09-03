@@ -2,11 +2,11 @@
 
 ## Is there an R package?
 
-No. Use the Python package from R the same way scvi-tools does: `reticulate`, or run `ambidose denoise` and load MTX/H5AD in Seurat. See {doc}`tutorials/from_r`. A Seurat object of filtered cells is not a substitute for the raw matrix when estimating $\chi$.
+No. Call the Python package from R with `reticulate`, or run `ambidose denoise` and read MTX or H5AD into Seurat. See {doc}`tutorials/from_r`. Estimating $\chi$ requires the matching raw matrix; a filtered Seurat object is not sufficient.
 
 ## Should I pass filtered barcodes?
 
-Yes. In Python the usual call is to load the Cell Ranger **filtered** matrix yourself and pass the matching **raw** matrix as `raw=` — `adata`'s barcodes are the whitelist:
+Yes. In Python, load the Cell Ranger **filtered** matrix and pass the matching **raw** matrix as `raw=`. Barcodes on `adata` are the whitelist:
 
 ```python
 adata = sc.read_10x_mtx("filtered_feature_bc_matrix/")

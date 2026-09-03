@@ -32,7 +32,7 @@ raw droplets + filtered cell barcodes
 
 Empty droplets determine the ambient composition $\chi_s$ for each sample. Each cell receives an operational scale $\rho_c$ and $\chi$-direction dose $d_c=\rho_c n_c$ (the rank-1 budget along $\chi_s$, not a cap on total UMI removal). The standard workflow (`denoise()`) writes non-negative integer counts to `adata.layers["ambidose_denoised"]` and, as its last step, also sets them as `adata.X` -- the original input moves to `adata.layers["raw_counts"]`.
 
-AmbiDose does **not** infer a generative count posterior, integrate batches, or annotate cell types. Automatic Leiden groups are a coarse identity for dose and subtraction; they are not lineage names, and the package does not call external annotators. Cell calling is not its focus: the matching Cell Ranger filtered barcodes are the default whitelist when available, refined against the estimated ambient profile; an external whitelist is accepted explicitly when the Cell Ranger call is unavailable or known to be unreliable. Without a whitelist, the CLI uses DIEM by default; Python callers may request DIEM, EmptyDrops, OrdMag, or a fixed cell count, so a raw, unfiltered droplet matrix is sufficient; ambient estimation always requires the matching raw droplet matrix.
+AmbiDose estimates ambient RNA and subtracts it. It does not fit a count posterior, correct batch effects, or assign cell-type names. Automatic Leiden groups are an operational identity for dose and subtraction. The usual whitelist is the matching Cell Ranger filtered barcodes, refined against χ. An external barcode list is accepted when that call is missing or unreliable. The CLI default without a whitelist is DIEM. Python callers may request DIEM, EmptyDrops, OrdMag, or a fixed cell count. χ is always estimated from the matching raw droplet matrix.
 
 ## Where to go
 
@@ -57,9 +57,9 @@ adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
 counts = adata.X  # denoised; original input is in layers["raw_counts"]
 ```
 
-`adata`'s barcodes are the cell whitelist. `raw=` is the matching unfiltered matrix (empty droplets for χ). The call returns a new copy; it does not mutate the object you passed in.
+Barcodes on `adata` are the cell whitelist. `raw=` is the matching unfiltered matrix. The call returns a new object.
 
-The whitelist-first form (load the raw matrix yourself, pass `cell_barcodes=`) is in {doc}`quickstart`.
+To load the raw matrix yourself and pass `cell_barcodes=`, see {doc}`quickstart`.
 
 ### Default CLI call
 
@@ -72,7 +72,7 @@ ambidose denoise \
 Pointing `--input` at a Cell Ranger `outs/` directory automatically pairs the raw matrix with filtered barcodes.
 
 :::{note}
-The recommended entry point is `denoise()`. `rho` can be biased high or low depending on true contamination; the known limitation is documented in {doc}`user_guide/method`.
+The entry point is `denoise()`. Treat `rho` as an operational scale; see {doc}`user_guide/method`.
 :::
 
 ::::{grid} 1 2 3 3

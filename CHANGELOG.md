@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-03
+
+### Documentation
+
+- Default Python call is `denoise(adata, raw=...)` after loading the filtered matrix.
+- R tutorial leads with `reticulate`.
+- Bioconda install, PyPI download badge, and Zenodo DOI `10.5281/zenodo.22278199`.
+
 ## [0.3.0] - 2026-09-02
 
 First public release.
