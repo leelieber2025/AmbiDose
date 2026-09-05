@@ -61,19 +61,21 @@ def read_10x_h5(
 
 
 def _resolve_maybe_gz(path: Path) -> Path:
-    """Return ``path`` if it exists, else ``path`` with/without a ``.gz`` suffix.
+    """Resolve a TSV path, preferring the gzipped Cell Ranger v3+ name.
 
-    Cell Ranger v2 output is uncompressed (``barcodes.tsv``); v3+ compresses
-    everything (``barcodes.tsv.gz``). Callers that hardcode one or the other
-    break on the other version for no reason -- this makes both transparent.
+    If both ``barcodes.tsv`` and ``barcodes.tsv.gz`` exist, the ``.gz`` file
+    is used. A missing preferred name falls back to the other suffix.
     """
     path = Path(path)
-    if path.exists():
-        return path
-    alt = path.with_suffix(path.suffix + ".gz") if path.suffix != ".gz" else path.with_suffix("")
-    if alt.exists():
-        return alt
-    return path  # let the caller's own open()/read raise a clear FileNotFoundError
+    if path.suffix == ".gz":
+        if path.exists():
+            return path
+        bare = path.with_suffix("")
+        return bare if bare.exists() else path
+    gz = path.with_suffix(path.suffix + ".gz")
+    if gz.exists():
+        return gz
+    return path
 
 
 def read_10x_barcodes(path: str | Path) -> list[str]:
@@ -111,11 +113,9 @@ def normalize_barcode(b: str) -> str:
 
 def _first_existing(*candidates: Path) -> Path | None:
     for c in candidates:
-        if c.exists():
-            return c
-        gz = c.with_suffix(c.suffix + ".gz")
-        if gz.exists():
-            return gz
+        hit = _resolve_maybe_gz(c)
+        if hit.exists():
+            return hit
     return None
 
 
@@ -261,10 +261,10 @@ def sniff_input(path: str | Path) -> ResolvedInput:
 def find_10x_mtx_samples(root: str | Path) -> dict[str, Path]:
     """Map sample name -> raw Cell Ranger mtx directory under ``root``.
 
-    Recognizes v2 (``<sample>/raw_gene_bc_matrices/<genome>/matrix.mtx``)
-    and v3+ (``<sample>/outs/raw_feature_bc_matrix/matrix.mtx.gz``, or the
-    same without the ``outs/`` wrapper), compressed or not. Sample name is
-    always the directory two levels above the raw mtx dir for v3-style
+    Prefers Cell Ranger v3+ (``<sample>/outs/raw_feature_bc_matrix/matrix.mtx.gz``,
+    or the same without ``outs/``). Still finds v2
+    (``<sample>/raw_gene_bc_matrices/<genome>/matrix.mtx``). Sample name is
+    the directory two levels above the raw mtx dir for v3-style
     layouts (``outs/raw_feature_bc_matrix`` -- 2 levels) and the Cell Ranger
     sample dir for v2 (``raw_gene_bc_matrices/<genome>`` -- 2 levels too),
     so both share the same ``parents[2]`` rule; the no-``outs/``-wrapper v3
@@ -273,12 +273,12 @@ def find_10x_mtx_samples(root: str | Path) -> dict[str, Path]:
     root = Path(root)
     found: dict[str, Path] = {}
     patterns = [
-        ("*/raw_gene_bc_matrices/*/matrix.mtx", 2),
-        ("*/raw_gene_bc_matrices/*/matrix.mtx.gz", 2),
         ("*/outs/raw_feature_bc_matrix/matrix.mtx.gz", 2),
         ("*/outs/raw_feature_bc_matrix/matrix.mtx", 2),
         ("*/raw_feature_bc_matrix/matrix.mtx.gz", 1),
         ("*/raw_feature_bc_matrix/matrix.mtx", 1),
+        ("*/raw_gene_bc_matrices/*/matrix.mtx.gz", 2),
+        ("*/raw_gene_bc_matrices/*/matrix.mtx", 2),
     ]
     for pattern, depth in patterns:
         for mtx in sorted(root.glob(pattern)):
@@ -305,8 +305,19 @@ def write_h5ad(adata: AnnData, path: str | Path, *, compression: str | None = "g
     adata.write_h5ad(str(path), compression=compression)
 
 
-def write_10x_mtx(adata: AnnData, path: str | Path, *, sample_key: str | None = None) -> Path:
-    """Write Cell Ranger v2-style ``matrix.mtx`` + ``barcodes.tsv`` + ``genes.tsv``.
+def write_10x_mtx(
+    adata: AnnData,
+    path: str | Path,
+    *,
+    version: int = 3,
+    sample_key: str | None = None,
+) -> Path:
+    """Write a Cell Ranger MTX directory.
+
+    Default ``version=3``: gzipped ``matrix.mtx.gz``, ``barcodes.tsv.gz``,
+    and three-column ``features.tsv.gz`` (id, name, feature type). Pass
+    ``version=2`` for uncompressed ``matrix.mtx``, ``barcodes.tsv``, and
+    two-column ``genes.tsv``.
 
     ``sample_key``: also write ``sample.tsv`` (one line per barcode, same
     order as ``barcodes.tsv``) from ``adata.obs[sample_key]`` when present.
@@ -315,24 +326,40 @@ def write_10x_mtx(adata: AnnData, path: str | Path, *, sample_key: str | None = 
     """
     from scipy.io import mmwrite
 
+    if version not in (2, 3):
+        raise ValueError("version must be 2 or 3")
     if sample_key is not None and sample_key not in adata.obs.columns:
         raise KeyError(f"sample_key={sample_key!r} not in adata.obs")
     out = Path(path)
     out.mkdir(parents=True, exist_ok=True)
     x = _as_int_csr(adata.X).T.tocsc()
-    mmwrite(out / "matrix.mtx", x, field="integer")
-    (out / "barcodes.tsv").write_text("\n".join(adata.obs_names.astype(str)) + "\n")
-    if sample_key is not None:
-        (out / "sample.tsv").write_text("\n".join(adata.obs[sample_key].astype(str)) + "\n")
     gene_id = (
         adata.var["gene_ids"].astype(str)
         if "gene_ids" in adata.var.columns
         else adata.var_names.astype(str)
     )
     symbol = adata.var_names.astype(str)
-    with (out / "genes.tsv").open("w") as f:
-        for gid, sym in zip(gene_id, symbol, strict=False):
-            f.write(f"{gid}\t{sym}\n")
+    if "feature_types" in adata.var.columns:
+        ftype = adata.var["feature_types"].astype(str)
+    else:
+        ftype = np.full(adata.n_vars, "Gene Expression", dtype=object)
+
+    if version == 3:
+        with gzip.open(out / "matrix.mtx.gz", "wb") as f:
+            mmwrite(f, x, field="integer")
+        with gzip.open(out / "barcodes.tsv.gz", "wt") as f:
+            f.write("\n".join(adata.obs_names.astype(str)) + "\n")
+        with gzip.open(out / "features.tsv.gz", "wt") as f:
+            for gid, sym, kind in zip(gene_id, symbol, ftype, strict=True):
+                f.write(f"{gid}\t{sym}\t{kind}\n")
+    else:
+        mmwrite(out / "matrix.mtx", x, field="integer")
+        (out / "barcodes.tsv").write_text("\n".join(adata.obs_names.astype(str)) + "\n")
+        with (out / "genes.tsv").open("w") as f:
+            for gid, sym in zip(gene_id, symbol, strict=True):
+                f.write(f"{gid}\t{sym}\n")
+    if sample_key is not None:
+        (out / "sample.tsv").write_text("\n".join(adata.obs[sample_key].astype(str)) + "\n")
     return out
 
 

@@ -11,9 +11,9 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22278199.svg)](https://doi.org/10.5281/zenodo.22278199)
 
 **AmbiDose** removes ambient RNA from droplet scRNA-seq. Empty droplets
-estimate the soup profile χ; each cell gets an operational dose
+estimate the soup profile χ. Each cell receives an operational dose
 `d_c = ρ_c · n_c`. Type-aware subtraction writes non-negative integer
-counts. It does not integrate batches or annotate cell types.
+counts. The method does not correct batch effects or assign cell types.
 
 Docs: [Read the Docs](https://ambidose.readthedocs.io/en/latest/).
 
@@ -42,12 +42,12 @@ adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
 ambidose denoise --input /path/to/outs --output cleaned.h5ad
 ```
 
-`rho` is an operational dose, not a calibrated contamination rate. Inspect
-`obs["ambidose_rho_trust"]` and the QC report before using it quantitatively.
+Treat `rho` as an operational dose. Check `obs["ambidose_rho_trust"]` and
+the QC report before using it as a contamination rate.
 
 ## Status
 
-**0.3.0 (Alpha).** Import as `import ambidose as amdose`. The entry point is
+**0.3.2 (Alpha).** Import as `import ambidose as amdose`. The entry point is
 `denoise()`. See the
 [API reference](https://ambidose.readthedocs.io/en/latest/api/index.html).
 
@@ -56,12 +56,12 @@ ambidose denoise --input /path/to/outs --output cleaned.h5ad
 1. [Installation](https://ambidose.readthedocs.io/en/latest/installation.html)
 2. [Quickstart](https://ambidose.readthedocs.io/en/latest/quickstart.html)
 3. [Tutorials](https://ambidose.readthedocs.io/en/latest/tutorials/index.html)
-4. [FAQ](https://ambidose.readthedocs.io/en/latest/faq.html) if something looks off
-5. [From R](https://ambidose.readthedocs.io/en/latest/tutorials/from_r.html) (`reticulate` or CLI)
+4. [FAQ](https://ambidose.readthedocs.io/en/latest/faq.html)
+5. [From R](https://ambidose.readthedocs.io/en/latest/tutorials/from_r.html)
 
 ## Citation
 
-Pin the package version used in the analysis, for example `ambidose==0.3.0`.
+Pin the package version used in the analysis, for example `ambidose==0.3.2`.
 Software record: [10.5281/zenodo.22278199](https://doi.org/10.5281/zenodo.22278199).
 See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/latest/citation.html).
 
@@ -70,7 +70,7 @@ See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/la
   title   = {AmbiDose: per-cell ambient dose removal for droplet scRNA-seq},
   author  = {Li, Zhao},
   year    = {2026},
-  version = {0.3.0},
+  version = {0.3.2},
   doi     = {10.5281/zenodo.22278199},
   url     = {https://doi.org/10.5281/zenodo.22278199},
 }

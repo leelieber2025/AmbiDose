@@ -88,9 +88,10 @@ Calling `subtract()` directly (bypassing `denoise()`) does not do this -- `X` st
 A trusted **broad** annotation is preferable when available. Compute it outside AmbiDose (your usual annotator, not this package) and pass the column:
 
 ```python
-amdose.denoise(
+adata = amdose.denoise(
     adata,
-    cell_barcodes=barcodes,
+    raw="raw_feature_bc_matrix.h5",
+    sample_key=None,
     type_key="cell_type",
 )
 ```
@@ -142,14 +143,12 @@ AmbiDose.
 ## 6. Continue with scanpy
 
 ```python
-cells = amdose.analysis_ready(adata)
-# X is denoised; raw UMIs are in layers["raw_counts"]
-# summarize(cells) still uses raw_counts, not the overwritten X
-
+# After denoise(raw=...), adata is already cells-only with X denoised.
 import scanpy as sc
-sc.pp.filter_genes(cells, min_cells=3)
-sc.pp.normalize_total(cells)
-sc.pp.log1p(cells)
+
+sc.pp.filter_genes(adata, min_cells=3)
+sc.pp.normalize_total(adata)
+sc.pp.log1p(adata)
 ```
 
-Subset cells only after ambient estimation unless the object already contains a valid stored $\chi$.
+On the whitelist-first form, subset to cells with `analysis_ready()` after ambient estimation unless the object already contains a valid stored $\chi$.

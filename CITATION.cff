@@ -17,8 +17,8 @@ identifiers:
     description: >-
       Concept DOI representing all versions; always resolves to the latest release.
 license: Apache-2.0
-version: 0.3.0
-date-released: "2026-09-02"
+version: 0.3.2
+date-released: "2026-09-04"
 keywords:
   - single-cell
   - RNA-seq

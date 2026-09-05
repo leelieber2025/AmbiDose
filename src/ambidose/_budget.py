@@ -84,18 +84,55 @@ def _realloc_unspent_rank1(
     dose: float,
     is_p: np.ndarray,
     is_u: np.ndarray,
+    r_t: np.ndarray | None = None,
+    *,
+    leftover_cap: float | None = None,
 ) -> np.ndarray:
     """Spend leftover χ-budget on non-protected, non-soupOnly genes.
 
     Protected genes keep their rank-1 slice. U genes stay on the soupOnly
     path. Leftover is the unused part of ``dose`` after the clipped take.
+
+    ``r_t`` (``mean/expected``, from :func:`_type_masks`) down-weights genes
+    whose observed level sits well above the pure-ambient ceiling even
+    though they didn't clear the ``native_confidence`` significance test --
+    an under-powered real marker (r_t >> 1) should not be treated the same
+    as a gene that genuinely looks like ambient (r_t ~= 1) just because
+    both failed to reach significance. Without this, leftover mass
+    concentrates on whichever unprotected genes have the highest χ,
+    regardless of how implausible "this is pure ambient" already looks for
+    that specific gene -- the mechanism behind on-target markers (e.g. a
+    cell-type's own canonical genes in an under-powered cluster) being
+    fully zeroed out by reallocation despite never being flagged is_u.
+
+    A flat per-gene fold cap (a multiple of the gene's own base rank-1
+    share) was tried and rejected: on real kidney data, the "legitimate"
+    and "harmful" realloc multiples occupy the *same* range (median 2.96x,
+    p90 5.76x across ~400k real gene-cluster events) -- there is no
+    magnitude threshold that separates them, so any cap tight enough to
+    matter for kidney/fetal-liver also costs must-win, and any cap loose
+    enough to spare must-win (5x, at the measured p90) does not move
+    kidney/fetal-liver's aggregate leak_ratio at all (see CHANGELOG).
+
+    ``leftover_cap``, when given, bounds the *total* leftover actually
+    redistributed (not any one gene's share of it) -- the caller computes
+    what leftover the frozen single-winner ownership rule would have
+    produced and passes it here, so the gap-cascade's wider ownership
+    (more genes protected per type) can never push realloc's total
+    footprint past what the already-validated baseline had. This is a
+    structural cap tied to *why* extra leftover exists (newly-protected
+    genes freeing up budget), not to any single gene's magnitude.
     """
     leftover = max(0.0, float(dose) - float(np.sum(take)))
+    if leftover_cap is not None:
+        leftover = min(leftover, max(0.0, float(leftover_cap)))
     if leftover <= 0:
         return take
     blocked = is_p | is_u
     room = np.where(blocked, 0.0, np.maximum(observed - take, 0.0))
     weights = np.where(blocked, 0.0, chi)
+    if r_t is not None:
+        weights = weights / np.maximum(1.0, r_t)
     return take + _alloc_budget(leftover, room, weights)
 
 

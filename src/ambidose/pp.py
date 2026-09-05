@@ -1692,7 +1692,7 @@ def subtract(
                 for t, idx_t in type_indices_s.items()
                 if t in type_means_s and idx_t.size >= MIN_TYPE_CELLS
             }
-            dominant_masks, n_meta_s = _dominant_owner_masks(
+            dominant_masks, dominant_masks_sw, n_meta_s = _dominant_owner_masks(
                 x,
                 n,
                 types_s_all,
@@ -1700,6 +1700,7 @@ def subtract(
                 type_indices=type_indices_s,
                 cell_keys=obs_keys,
                 max_type_mean=max_type_mean,
+                also_single_winner=True,
             )
             sample_n_meta = int(n_meta_s)
             native_everywhere = _native_everywhere_mask(
@@ -1738,16 +1739,20 @@ def subtract(
                 d_sum = float(d_v[idx].sum())
                 if d_sum <= 0:
                     continue
+                y_cl = np.asarray(x[idx].sum(axis=0)).ravel().astype(np.float64)
+                leftover_cap = None
                 if t in EMPTY_TYPES:
                     is_u = np.zeros(adata.n_vars, dtype=bool)
                     is_p = np.zeros(adata.n_vars, dtype=bool)
                     native_confidence = np.zeros(adata.n_vars)
+                    r_t = np.ones(adata.n_vars)
                 elif idx.size < MIN_TYPE_CELLS:
                     # Fragments smaller than MIN_TYPE_CELLS skip extra-clear
                     # and take only the protected rank-1 slice.
                     is_u = np.zeros(adata.n_vars, dtype=bool)
                     is_p = np.ones(adata.n_vars, dtype=bool)
                     native_confidence = np.ones(adata.n_vars)
+                    r_t = np.ones(adata.n_vars)
                     sample_tiny += int(idx.size)
                 else:
                     extra_mask = extra_protect_s.get(t, np.zeros(adata.n_vars, dtype=bool))
@@ -1764,12 +1769,34 @@ def subtract(
                         "exclude": exclude,
                         "empirical_margin": empirical_margin,
                     }
-                    is_u, is_p, native_confidence = _type_masks(x, n, chi, idx, **mask_kw)
+                    is_u, is_p, native_confidence, r_t = _type_masks(x, n, chi, idx, **mask_kw)
                     if relax_hk_when_soup_like and _p_set_is_soup_like(x, n, chi, idx, is_p):
-                        is_u, is_p, native_confidence = _type_masks(
+                        is_u, is_p, native_confidence, r_t = _type_masks(
                             x, n, chi, idx, **mask_kw, collision_exception=False
                         )
-                y_cl = np.asarray(x[idx].sum(axis=0)).ravel().astype(np.float64)
+                    # The gap-cascade's wider ownership (dominant_masks) can
+                    # protect more genes than the frozen single-winner rule
+                    # (dominant_masks_sw) would have, which frees up more of
+                    # d_sum as "unspent" -- _realloc_unspent_rank1 then
+                    # concentrates that extra leftover onto whatever else is
+                    # still unprotected, over-correcting it past what the
+                    # already-validated single-winner baseline ever did.
+                    # Compute what leftover the single-winner rule would have
+                    # produced and use it as a hard cap below, so the wider
+                    # ownership's benefit is never paid for by pushing
+                    # realloc's total footprint past the frozen baseline.
+                    exclude_sw = (
+                        dominant_masks_sw.get(t, np.zeros(adata.n_vars, dtype=bool))
+                        | mt_mask
+                        | extra_mask
+                        | native_everywhere
+                    )
+                    is_u_sw, _is_p_sw, conf_sw, _r_t_sw = _type_masks(
+                        x, n, chi, idx, **{**mask_kw, "exclude": exclude_sw}
+                    )
+                    take_sw = _confidence_weighted_take(y_cl, chi, d_sum, conf_sw, None)
+                    take_sw = np.where(is_u_sw, 0.0, take_sw)
+                    leftover_cap = max(0.0, d_sum - float(np.sum(take_sw)))
                 n_idx = n[idx]
                 d_idx = d_v[idx]
                 n_sum = float(n_idx.sum())
@@ -1784,7 +1811,9 @@ def subtract(
                 # when rho_t is above the floor.
                 take_rank1 = _confidence_weighted_take(y_cl, chi, d_sum, native_confidence, None)
                 take_rank1 = np.where(is_u, 0.0, take_rank1)
-                take_rank1 = _realloc_unspent_rank1(take_rank1, y_cl, chi, d_sum, is_p, is_u)
+                take_rank1 = _realloc_unspent_rank1(
+                    take_rank1, y_cl, chi, d_sum, is_p, is_u, r_t, leftover_cap=leftover_cap
+                )
                 take_rank1_native = np.where(is_p, take_rank1, 0.0)
                 take_rank1_ambient = np.where(is_p, 0.0, take_rank1)
                 take_u = np.where(is_u, y_cl, 0.0)

@@ -6,6 +6,7 @@
 [![Conda downloads](https://img.shields.io/conda/dn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
 [![Python versions](https://img.shields.io/pypi/pyversions/ambidose.svg)](https://pypi.org/project/ambidose/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/leelieber2025/AmbiDose/blob/main/LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22278199.svg)](https://doi.org/10.5281/zenodo.22278199)
 
 ## What AmbiDose does
 
@@ -31,7 +32,7 @@ raw droplets + filtered cell barcodes
 
 Empty droplets determine the ambient composition $\chi_s$ for each sample. Each cell receives an operational scale $\rho_c$ and $\chi$-direction dose $d_c=\rho_c n_c$ (the rank-1 budget along $\chi_s$, not a cap on total UMI removal). The standard workflow (`denoise()`) writes non-negative integer counts to `adata.layers["ambidose_denoised"]` and, as its last step, also sets them as `adata.X` -- the original input moves to `adata.layers["raw_counts"]`.
 
-AmbiDose does **not** infer a generative count posterior, integrate batches, or annotate cell types. Automatic Leiden groups are a coarse identity for dose and subtraction; they are not lineage names, and the package does not call external annotators. Cell calling is not its focus: the matching Cell Ranger filtered barcodes are the default whitelist when available, refined against the estimated ambient profile; an external whitelist is accepted explicitly when the Cell Ranger call is unavailable or known to be unreliable. Without a whitelist, the CLI uses DIEM by default; Python callers may request DIEM, EmptyDrops, OrdMag, or a fixed cell count, so a raw, unfiltered droplet matrix is sufficient; ambient estimation always requires the matching raw droplet matrix.
+AmbiDose estimates ambient RNA and subtracts it. It does not fit a count posterior, correct batch effects, or assign cell-type names. Automatic Leiden groups are an operational identity for dose and subtraction. The usual whitelist is the matching Cell Ranger filtered barcodes, refined against χ. An external barcode list is accepted when that call is missing or unreliable. The CLI default without a whitelist is DIEM. Python callers may request DIEM, EmptyDrops, OrdMag, or a fixed cell count. χ is always estimated from the matching raw droplet matrix.
 
 ## Where to go
 
@@ -47,18 +48,6 @@ AmbiDose does **not** infer a generative count posterior, integrate batches, or 
 ### Default Python call
 
 ```python
-import ambidose as amdose
-
-adata = amdose.read_10x_h5("raw_feature_bc_matrix.h5")
-cell_barcodes = amdose.read_10x_barcodes("filtered_feature_bc_matrix.h5")
-amdose.denoise(adata, cell_barcodes=cell_barcodes)
-
-counts = adata.X  # denoised; original input is in layers["raw_counts"]
-```
-
-If you already loaded your own filtered, cells-only object the usual scanpy way, pass the matching raw matrix as `raw=` instead -- `adata`'s own barcodes become the whitelist, and a denoised copy of that same `adata` is returned:
-
-```python
 import scanpy as sc
 import ambidose as amdose
 
@@ -67,6 +56,10 @@ adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
 
 counts = adata.X  # denoised; original input is in layers["raw_counts"]
 ```
+
+Barcodes on `adata` are the cell whitelist. `raw=` is the matching unfiltered matrix. The call returns a new object.
+
+To load the raw matrix yourself and pass `cell_barcodes=`, see {doc}`quickstart`.
 
 ### Default CLI call
 
@@ -79,7 +72,7 @@ ambidose denoise \
 Pointing `--input` at a Cell Ranger `outs/` directory automatically pairs the raw matrix with filtered barcodes.
 
 :::{note}
-The recommended entry point is `denoise()`. `rho` can be biased high or low depending on true contamination; the known limitation is documented in {doc}`user_guide/method`.
+The entry point is `denoise()`. Treat `rho` as an operational scale; see {doc}`user_guide/method`.
 :::
 
 ::::{grid} 1 2 3 3

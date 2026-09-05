@@ -14,7 +14,8 @@ All `denoise` options:
 |---|---|
 | `--input`, `--root`, `--manifest` | Select exactly one single input, sample root, or library manifest |
 | `--output` | Required output path |
-| `--output-format` | `h5ad` or `10x-mtx` |
+| `--output-format` | `h5ad` (default) or `10x-mtx`. MTX defaults to Cell Ranger v3 (`matrix.mtx.gz`, `barcodes.tsv.gz`, three-column `features.tsv.gz`). |
+| `--mtx-version` | `3` (default) or `2` (uncompressed `genes.tsv`). Only used with `--output-format 10x-mtx`. |
 | `--report`, `--summary-json` | HTML and machine-readable QC outputs |
 | `--cells-only` | Emit called cells with denoised counts in `X` |
 | `--cell-barcodes` | External whitelist for single-input mode |
@@ -63,7 +64,7 @@ See {doc}`../tutorials/reports_and_plots` for report contents, plotting, and ana
 ambidose denoise --root /data/runs --output cleaned.h5ad
 ```
 
-The root mode discovers Cell Ranger v2/v3 sample layouts, estimates each library's ambient profile separately, then concatenates samples over their shared genes. `--cell-barcodes` is intentionally rejected in root mode because barcodes must be paired per sample.
+The root mode discovers Cell Ranger sample folders (v3+ `outs/` first; v2 layouts still match), estimates each library's ambient profile separately, then concatenates samples over their shared genes. `--cell-barcodes` is intentionally rejected in root mode because barcodes must be paired per sample.
 
 For per-library external whitelists, use a TSV manifest instead:
 

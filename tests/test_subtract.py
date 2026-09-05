@@ -911,7 +911,7 @@ def test_ambient_equality_has_zero_native_confidence():
     chi = np.array([0.0002, 0.0002])
     idx = np.arange(20)
     exclude = np.zeros(2, dtype=bool)
-    _, _, conf = _type_masks(
+    _, _, conf, _ = _type_masks(
         x, n, chi, idx, max_type_mean=0.05, min_chi=1e-6, top_n=100, exclude=exclude
     )
     assert (conf < 0.05).all()

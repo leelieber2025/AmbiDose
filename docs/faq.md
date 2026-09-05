@@ -2,13 +2,20 @@
 
 ## Is there an R package?
 
-No. Use the Python package from R the same way scvi-tools does: `reticulate`, or run `ambidose denoise` and load MTX/H5AD in Seurat. See {doc}`tutorials/from_r`. A Seurat object of filtered cells is not a substitute for the raw matrix when estimating $\chi$.
+No. Call the Python package from R with `reticulate`, or run `ambidose denoise` and read MTX or H5AD into Seurat. See {doc}`tutorials/from_r`. Estimating $\chi$ requires the matching raw matrix; a filtered Seurat object is not sufficient.
 
 ## Should I pass filtered barcodes?
 
-Yes. The matching Cell Ranger filtered barcodes are the default cell whitelist. Give `cell_barcodes=` in Python or `--cell-barcodes` on the CLI; a Cell Ranger `outs/` input is paired automatically when the filtered output is present.
+Yes. In Python, load the Cell Ranger **filtered** matrix and pass the matching **raw** matrix as `raw=`. Barcodes on `adata` are the whitelist:
 
-If that whitelist is unavailable or known to be unreliable, the same arguments accept an external whitelist from CellBender, EmptyDrops, or another cell caller. Pass barcode names only and keep the matching Cell Ranger **raw** matrix as the count input so empty droplets remain available for soup estimation.
+```python
+adata = sc.read_10x_mtx("filtered_feature_bc_matrix/")
+adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
+```
+
+On the CLI, a Cell Ranger `outs/` input pairs raw and filtered automatically. `cell_barcodes=` / `--cell-barcodes` is the lower-level form when you load the raw matrix yourself.
+
+If that whitelist is unavailable or known to be unreliable, `cell_barcodes=` / `--cell-barcodes` accept barcode names from CellBender, EmptyDrops, or another caller. Pass names only and keep the matching Cell Ranger **raw** matrix as the count input so empty droplets remain available for soup estimation.
 
 ## How should I handle OCM/CMO multiplexing?
 
@@ -62,7 +69,9 @@ Inspect `obs["ambidose_rho_trust"]` and the QC report (`write_report` / `--repor
 
 ## Must I pass cell barcodes to `denoise()`?
 
-Only when Python code has neither an existing whitelist nor an explicit cell-calling mode. The CLI resolves that case to `cell_calling="diem"`. The Python `denoise()` function raises unless it receives `cell_barcodes`, `cell_calling`, `expect_cells`, existing droplet labels, or a stored χ; pass `cell_calling="diem"` explicitly to obtain the CLI behavior. DIEM builds a three-component empty/debris/cell mixture whitelist and applies the first inflection only when the mixture call is inflated relative to the rank-curve cliff. To retain a Cell Ranger or external whitelist without refinement:
+Not in the usual Python call: `denoise(adata, raw=...)` uses `adata.obs_names` as the whitelist. You only need `cell_barcodes=` when you load the raw matrix yourself.
+
+Without `raw=`, `cell_barcodes`, an existing whitelist, or an explicit cell-calling mode, Python `denoise()` raises. The CLI resolves that case to `cell_calling="diem"`. Pass `cell_calling="diem"` in Python to obtain the CLI behavior. DIEM builds a three-component empty/debris/cell mixture whitelist and applies the first inflection only when the mixture call is inflated relative to the rank-curve cliff. To retain a Cell Ranger or external whitelist without refinement:
 
 ```python
 amdose.denoise(adata, cell_barcodes="filtered_barcodes.tsv", cell_calling="off")

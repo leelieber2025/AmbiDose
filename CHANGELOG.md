@@ -2,7 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.3.2] - 2026-09-04
+
+### Changed
+
+- Dominant-gene ownership now allows a marker gene to be shared by several
+  related sub-population clusters ("gap cascade") instead of being awarded
+  to a single global-argmax winner, better matching biology where markers
+  are routinely shared across related sub-populations rather than owned
+  exclusively by one.
+- Leftover pooled-dose reallocation is now capped against what the
+  previous single-winner ownership rule would have redistributed for the
+  same type/gene, and down-weights genes whose observed level already
+  exceeds the ambient ceiling. Both are defensive safeguards against
+  over-correction on small or fragmented clusters; no change to must-win
+  barnyard benchmarks.
+- `write_10x_mtx()` and CLI `--output-format 10x-mtx` default to Cell Ranger
+  v3 (`features.tsv.gz`). Pass `version=2` or `--mtx-version 2` for v2
+  (`genes.tsv`). Input discovery prefers v3+ `raw_feature_bc_matrix` (and
+  `.gz` barcodes) when both layouts are present.
+
+## [0.3.1] - 2026-09-03
+
+### Documentation
+
+- Default Python call is `denoise(adata, raw=...)` after loading the filtered matrix.
+- R tutorial leads with `reticulate`.
+- Bioconda install, PyPI download badge, and Zenodo DOI `10.5281/zenodo.22278199`.
 
 ## [0.3.0] - 2026-09-02
 

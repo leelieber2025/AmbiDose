@@ -60,7 +60,16 @@ def main(argv: list[str] | None = None) -> int:
         choices=["h5ad", "10x-mtx"],
         default="h5ad",
         help="h5ad keeps raw X plus a denoised layer, all droplets, unless "
-        "--cells-only. 10x-mtx cannot store layers: requires --cells-only",
+        "--cells-only. 10x-mtx is Cell Ranger v3 (features.tsv.gz) by default "
+        "and cannot store layers: requires --cells-only",
+    )
+    p_den.add_argument(
+        "--mtx-version",
+        type=int,
+        choices=[2, 3],
+        default=3,
+        help="Cell Ranger MTX layout when --output-format 10x-mtx: 3 (default, "
+        "features.tsv.gz) or 2 (genes.tsv, uncompressed)",
     )
     p_den.add_argument(
         "--report",
@@ -594,7 +603,12 @@ def _denoise(args: argparse.Namespace) -> int:
     print("[6/6] writing output")
     require_run_keys(adata)
     if args.output_format == "10x-mtx":
-        write_10x_mtx(analysis_ready(adata), args.output, sample_key=sample_key)
+        write_10x_mtx(
+            analysis_ready(adata),
+            args.output,
+            version=args.mtx_version,
+            sample_key=sample_key,
+        )
     else:
         output = analysis_ready(adata) if args.cells_only else adata
         write_h5ad(output, args.output)

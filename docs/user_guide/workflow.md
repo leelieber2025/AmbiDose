@@ -6,7 +6,7 @@ The product path is `denoise()`, then `write_report()` (or CLI `--report`). `cla
 
 The completed product output keeps a small public schema: `obs` contains `ambidose_droplet`, the final `ambidose_d` and `ambidose_rho`, `ambidose_removed_umi`, and `ambidose_rho_trust`; automatic typing also adds `ambidose_cluster`. Estimator-specific working columns are removed before `denoise()` returns. `var` stores the ambient profile and per-gene removal, while `uns["ambidose"]` stores run-level summaries.
 
-Two calling conventions: `denoise(raw_adata, cell_barcodes=...)` mutates and returns the raw+empty-droplet object you loaded yourself (the form the rest of this page describes); `denoise(filtered_adata, raw=...)` instead takes your own already-filtered, cells-only object as `adata`, uses its `obs_names` as the whitelist, and returns a denoised, barcode/gene-aligned copy of that same object (see {doc}`../quickstart`). The two are mutually exclusive (`raw=` and `cell_barcodes=` cannot both be given) and produce identical results for the same underlying data.
+The usual Python call is `denoise(filtered_adata, raw=...)`: `adata` is your cells-only object (e.g. from `sc.read_10x_mtx`), `raw=` is the matching unfiltered matrix, and a denoised copy of `adata` is returned. `denoise(raw_adata, cell_barcodes=...)` is the lower-level form: it mutates the raw+empty-droplet object you loaded yourself. The two are mutually exclusive and produce identical results for the same data. See {doc}`../quickstart`. The rest of this page describes the internals of that shared path.
 
 ## Raw counts are required
 
@@ -69,7 +69,7 @@ The default estimator uses a broad `type_key`. `denoise()` resolves one in this 
 
 Do not pass a high-resolution atlas or a per-cell reassignment of cluster labels from ambient-contaminated marker scores. Fine fragments skip extra-clear below 10 cells and weaken exclusive gene ownership. Annotate cell types on the denoised counts after `denoise()`, or supply broad labels computed outside this package.
 
-Dose is estimated per Leiden fragment. Dominant-gene ownership is computed **per sample** from that sample's groups: fragments whose whole profiles are indistinguishable from split noise form a meta-group and share identity-gene ownership. Concatenating libraries does not share an owner catalog across samples. Each sample still uses its own $\chi_s$.
+Dose is estimated per Leiden fragment. Dominant-gene ownership is computed **per sample** from that sample's groups: fragments whose whole profiles are indistinguishable from split noise form a meta-group and share identity-gene ownership. A gene's ownership can further be shared across several distinct meta-groups of the same broad identity when each clears the ownership fold threshold over the next-lower tier (e.g. erythroid maturation stages at very different hemoglobin levels) — not only the single largest one. Concatenating libraries does not share an owner catalog across samples. Each sample still uses its own $\chi_s$.
 
 ## Dose estimation
 
