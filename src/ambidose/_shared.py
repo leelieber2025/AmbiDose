@@ -45,6 +45,18 @@ MIN_TYPE_CELLS = 10
 # Housekeeping and unowned injection genes sit at ~1x across groups;
 # a 1.8x lineage marker (CD3D-like) still clears 1.2x.
 OWNER_MIN_FOLD = 1.2
+# Standard-error margin (in SEs, each side) widening the OWNER_MIN_FOLD gap
+# test when per-group sampling noise is available. A candidate gap must
+# clear the fold even under this conservative reading of both group means,
+# not just their point estimates -- see _exclusive_owner_masks's docstring
+# for the GSE218853 case (Itm2b/Proximal_tubule) that motivated this: two
+# group means straddling the 1.2x line by less than their own standard
+# error is a coin flip, not a resolved ownership decision. z=1 is the
+# minimal margin that changes that specific decision without disturbing
+# any case in this codebase's existing owner-mask tests, all of which use
+# zero-variance fixtures (se=0 leaves the original point-estimate test
+# untouched).
+OWNER_GAP_SE_Z = 1.0
 # A fragment can only inherit its meta-group's ownership grant if its own
 # raw mean is within this fold of the meta-group's strongest individual
 # fragment. Meta-group merging (_split_noise_meta_ids) is intentionally
@@ -64,6 +76,14 @@ OWNER_MIN_FOLD = 1.2
 # order of magnitude apart) while excluding every measured false positive,
 # all of which start above 16x. See CHANGELOG.
 OWNER_FRAGMENT_MIN_SHARE_FOLD = 10.0
+# Smallest χ-mass prefix uses unique argmax ownership instead of the gap
+# cascade. Soup-dominant genes (hemoglobin in blood-rich samples) otherwise
+# get co-owned by every fragment in a merged meta-group. 0.15 was chosen on
+# fetal liver 200/stratum (on-target ≥0.95) and confirmed on the full
+# 114k-cell cohort: leak 0.0197→0.0148; the on-target drop is HBA1/HBA2 in
+# erythroid cells (99.98% of the UMI gap), not other lineage markers.
+# hgmm/Mixture/GSE147203 species-path scores are unchanged.
+CHI_MASS_SINGLE_WINNER = 0.15
 # EXPERIMENTAL (not wired into the frozen product path by default): a gene
 # ranks as "owned" by a meta-group if it's in that group's own top-K genes
 # by mean, regardless of how other groups compare -- lets biologically

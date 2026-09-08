@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.3] - 2026-09-07
+
+### Changed
+
+- Ambient dose estimation for samples with more than one cell type now
+  estimates each type's own contribution to the empty-droplet profile
+  directly, instead of comparing it against a pooled profile of every
+  other type. This removes spurious cross-type differences in estimated
+  contamination, improves native signal retention, and improves
+  specificity/precision on barnyard validation data with no loss of
+  sensitivity.
+- Gene-ownership decisions between cell types now account for sampling
+  noise: a fold-change gap that only clears the ownership threshold by
+  less than its own measurement uncertainty is no longer treated as a
+  confident decision.
+- High-χ genes (the smallest set of ambient genes covering 15% of the
+  empty-droplet profile) use single-owner assignment; other genes keep
+  shared ownership across related clusters. Prevents highly ambient genes
+  such as hemoglobin from being co-owned by every fragment of a merged
+  cluster.
+
+### Fixed
+
+- `denoise()`'s documentation still described the previous ambient
+  dose-estimation method; updated to match the change above.
+
 ## [0.3.2] - 2026-09-04
 
 ### Changed

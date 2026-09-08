@@ -61,8 +61,8 @@ def test_split_labels_denoise_still_n_inflated_zero():
     ad = make_toy(n_samples=1, n_empty=50, n_cells=40, seed=3)
     split_type_labels(ad, n_splits=2, seed=0)
     cells = ad.obs_names[_cells(ad)].tolist()
+    raw = ad.X.tocsr().copy()
     denoise(ad, cell_barcodes=cells, type_key="label_split", sample_key=None)
-    raw = ad.X.tocsr()
     den = ad.layers["ambidose_denoised"].tocsr()
     assert (den > raw).nnz == 0
     assert "ambidose_rho_trust" in ad.obs
@@ -87,10 +87,17 @@ def test_zero_ambient_truth_and_no_inflation():
     cells = _cells(ad)
     assert np.allclose(ad.obs.loc[cells, "true_rho"].to_numpy(dtype=float), 0.0)
     names = ad.obs_names[cells].tolist()
+    raw = ad.X.tocsr().copy()
     denoise(ad, cell_barcodes=names, type_key="cell_type", sample_key=None)
-    raw = ad.X.tocsr()
     den = ad.layers["ambidose_denoised"].tocsr()
     assert (den > raw).nnz == 0
+    # Regression ceiling for this fixed fixture (current loss is 5.39%).
+    # This is not a claim that zero ambient is identifiable: the fixture
+    # contains weak native off-block expression resembling contamination.
+    # denoise replaces X, so comparing against X after the call would only
+    # compare the corrected matrix with itself and miss overcorrection.
+    loss = float((raw[cells] - den[cells]).sum()) / float(raw[cells].sum())
+    assert 0 <= loss < 0.06
     rho = ad.obs.loc[cells, "ambidose_rho"].to_numpy(dtype=float)
     # A tighter rho<0.05 check used to be xfailed below this test; it was
     # a wrong expectation, not a bug (see
@@ -100,8 +107,12 @@ def test_zero_ambient_truth_and_no_inflation():
     trust = ad.obs.loc[cells, "ambidose_rho_trust"].astype(str)
     # At least some cells avoid every quantitative-risk flag.
     assert (trust == "ok").any()
-    # Native protection deliberately leaves most of the overestimated dose unspent.
-    assert ad.uns["ambidose"]["trust"]["sample_dose_unspent"] is True
+    # Before the 2026-09-07 estimate_dose_mixture fix (chi self-contamination
+    # deconvolution instead of leave-one-type ambient), the mixture dose was
+    # inflated enough that removed UMI stayed under half the predicted budget
+    # on this fixture. The fix reduces that over-prediction, so execution is
+    # now above the under-execution ratio (~0.56 of predicted, not <0.5).
+    assert ad.uns["ambidose"]["trust"]["sample_dose_unspent"] is False
 
 
 def test_zero_ambient_reports_off_block_native_leak_not_zero():

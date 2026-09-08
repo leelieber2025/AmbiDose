@@ -165,7 +165,7 @@ def test_two_type_unbalanced_library_still_uses_empty_profile():
     ad.obs[DROPLET_KEY] = "cell"
     ad.var[CHI_KEY] = [0.5, 0.5]
     estimate_dose_mixture(ad, type_key="cell_type")
-    assert set(ad.obs["ambidose_mixture_profile"].astype(str)) == {"empty"}
+    assert set(ad.obs["ambidose_mixture_profile"].astype(str)) == {"chi_deconv"}
 
 
 def test_chi_concentrated_on_one_gene_does_not_nan():

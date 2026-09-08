@@ -9,6 +9,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from anndata import AnnData
+from scipy.optimize import nnls
 
 from ._shared import (
     CHI_KEY,
@@ -758,20 +759,39 @@ def estimate_dose_mixture(
 ) -> np.ndarray:
     """Estimate dose from native and contamination profiles.
 
-    Two mixture fits are computed whenever empty-droplet χ is available:
+    One mixture fit per type, on an ambient reference derived from
+    empty-droplet χ whenever χ is available:
 
-    - ``cell``: leave-one-type ambient, DecontX-style
-    - ``empty``: ambient locked to χ
+    - NNLS-regress χ against the sample's type-profile matrix
+      (χ ≈ Σ_t π_t · profile_t, π ≥ 0, renormalized to sum to 1) to
+      estimate each type's own share of what actually shows up in empty
+      droplets.
+    - That type's ambient reference is χ with its own estimated share
+      subtracted back out: ``(χ - π_t·profile_t) / (1 - π_t)``, clipped to
+      stay nonnegative (π_t capped at 0.95).
 
-    The leave-one-type profile is used unless it is exactly one other cell
-    type. That is circular contamination, the two-species barnyard failure
-    mode; libraries with several types keep the leave-one-type fit. A sample
-    with fewer than two types has no leave-one-type ambient: the χ mixture
-    EM then fits a contaminated type mean against χ and reports ρ≈1. Those
-    samples use the untyped quantile-floor on χ instead (``fallback_*``
-    controls that floor -- same knobs and defaults as ``estimate_dose()``'s
-    own untyped path, exposed explicitly here rather than hardcoded, so the
-    two don't silently drift apart). Empty droplets remain the independent
+    This replaces the leave-one-type ("cell", DecontX-style) ambient this
+    function used before 2026-09-07: giving every type in a sample the
+    same complement-of-everyone-else profile makes each type's fit see a
+    structurally different contamination hypothesis, which introduces
+    type-linked bias into ρ that has no counterpart in true injected
+    contamination. Estimating each type's actual self-contamination share
+    from χ directly, instead of assuming it, removes most of that bias
+    while improving native retention and, on both barnyard datasets,
+    specificity/precision at essentially unchanged sensitivity. Full
+    rationale, the leave-one-type counterfactual, and the before/after
+    evaluation across all manuscript datasets are in
+    docs/fig1_design_gap_audit_20260907.md and the 2026-09-07 DEVLOG
+    entries ("gap-3 fix merged" and the counterfactual confirmation above
+    it).
+
+    A sample with fewer than two types has no type-profile matrix to
+    regress against: the χ mixture EM then fits a contaminated type mean
+    against χ and reports ρ≈1. Those samples use the untyped
+    quantile-floor on χ instead (``fallback_*`` controls that floor --
+    same knobs and defaults as ``estimate_dose()``'s own untyped path,
+    exposed explicitly here rather than hardcoded, so the two don't
+    silently drift apart). Empty droplets remain the independent
     composition used by ``subtract()``.
     """
     _reject_view(adata, "estimate_dose_mixture")
@@ -858,6 +878,14 @@ def estimate_dose_mixture(
             status[idx] = "quantile_fallback"
             n_genes_ev[idx] = n_valid_q
             continue
+        pi: dict[object, float] = {}
+        if empty_ambient is not None:
+            basis = np.column_stack([type_profiles[t] for t in sample_types])
+            coef, _resid = nnls(basis, empty_ambient)
+            total_coef = float(coef.sum())
+            if total_coef > 0:
+                coef = coef / total_coef
+            pi = {t: float(coef[j]) for j, t in enumerate(sample_types)}
         for cell_type in sample_types:
             idx = np.flatnonzero(in_sample & (types == cell_type))
             idx = idx[n[idx] > 0]
@@ -865,51 +893,36 @@ def estimate_dose_mixture(
                 continue
             coo = x[idx].tocoo()
             native_init = type_profiles[cell_type]
-            cell_ambient = _simplex(total_profile - type_sums[cell_type], pseudocount)
-            cell_fit = _two_component_mixture_em(
+            if empty_ambient is not None:
+                pi_t = min(pi.get(cell_type, 0.0), 0.95)
+                self_removed = empty_ambient - pi_t * type_profiles[cell_type]
+                ambient_t = _simplex(np.clip(self_removed, 0.0, None), pseudocount)
+                selected_profile = "chi_deconv"
+            else:
+                ambient_t = _simplex(total_profile - type_sums[cell_type], pseudocount)
+                pi_t = float("nan")
+                selected_profile = "cell"
+            fit = _two_component_mixture_em(
                 coo=coo,
                 n_cells=n[idx],
                 n_vars=adata.n_vars,
                 native=native_init,
-                ambient=cell_ambient,
+                ambient=ambient_t,
                 max_iter=max_iter,
                 convergence=convergence,
                 initial_rho=initial_rho,
                 pseudocount=pseudocount,
             )
-            rho_cell[idx] = cell_fit[0]
-            others = [t for t in sample_types if t != cell_type]
-            if empty_ambient is not None:
-                empty_tv[idx] = _tv_distance(cell_fit[4], empty_ambient)
-                empty_fit = _two_component_mixture_em(
-                    coo=coo,
-                    n_cells=n[idx],
-                    n_vars=adata.n_vars,
-                    native=native_init,
-                    ambient=empty_ambient,
-                    max_iter=max_iter,
-                    convergence=convergence,
-                    initial_rho=initial_rho,
-                    pseudocount=pseudocount,
-                )
-                rho_empty[idx] = empty_fit[0]
-                use_empty = len(others) == 1
-            else:
-                empty_fit = None
-                use_empty = False
-            if use_empty:
-                selected_rho, selected_native, n_iter, did_converge, _inferred = empty_fit
-                selected_ambient = empty_ambient
-                selected_profile = "empty"
-            else:
-                selected_rho, selected_native, n_iter, did_converge, _inferred = cell_fit
-                selected_ambient = cell_ambient
-                selected_profile = "cell"
+            selected_rho, selected_native, n_iter, did_converge, _inferred = fit
+            rho_cell[idx] = selected_rho
+            rho_empty[idx] = selected_rho
             rho[idx] = selected_rho
+            if empty_ambient is not None:
+                empty_tv[idx] = _tv_distance(selected_native, empty_ambient)
             iterations[idx] = n_iter
             converged[idx] = did_converge
             status[idx] = "fitted_converged" if did_converge else "fitted_unconverged"
-            profile_tv[idx] = _tv_distance(selected_native, selected_ambient)
+            profile_tv[idx] = _tv_distance(selected_native, ambient_t)
             profile[idx] = selected_profile
             n_genes_ev[idx] = nnz_per_cell[idx]
     dose = rho * n

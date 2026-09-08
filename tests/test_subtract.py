@@ -394,6 +394,33 @@ def test_soup_only_does_not_wipe_abundant_ceiling_collision():
     assert (den[:, 1] >= 70.0).all()
 
 
+def test_chi_mass_prefix_mask_covers_requested_mass():
+    from ambidose._ownership import _chi_mass_prefix_mask
+
+    chi = np.array([0.10, 0.05, 0.01, 0.84])
+    high = _chi_mass_prefix_mask(chi, 0.15)
+    assert high.tolist() == [False, False, False, True]
+    high90 = _chi_mass_prefix_mask(chi, 0.90)
+    assert high90[3] and high90[0]
+
+
+def test_restrict_high_chi_to_single_winner_only_on_prefix():
+    from ambidose._ownership import _restrict_high_chi_to_single_winner
+
+    chi = np.array([0.80, 0.10, 0.05, 0.05])
+    gap = {
+        "a": np.array([True, True, False, False]),
+        "b": np.array([True, False, True, False]),
+    }
+    sw = {
+        "a": np.array([True, False, False, False]),
+        "b": np.array([False, False, True, False]),
+    }
+    out = _restrict_high_chi_to_single_winner(gap, sw, chi, mass=0.15)
+    assert out["a"][0] and not out["b"][0]
+    assert out["a"][1] and not out["b"][1]
+
+
 def test_dominant_owner_is_shared_only_within_half_split_noise():
     from ambidose.pp import _dominant_owner_masks, _type_means
 

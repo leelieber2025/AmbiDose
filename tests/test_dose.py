@@ -438,7 +438,7 @@ def test_mixture_dose_separates_zero_and_cross_type_ambient():
     np.testing.assert_allclose(contaminated, 0.1, atol=0.01)
 
 
-def test_mixture_uses_empty_profile_when_leave_one_type_is_another_cell_type():
+def test_mixture_deconv_avoids_circular_leave_one_type_reference():
     from anndata import AnnData
     from scipy import sparse
 
@@ -458,7 +458,7 @@ def test_mixture_uses_empty_profile_when_leave_one_type_is_another_cell_type():
     adata.obs["ambidose_droplet"] = "cell"
     adata.var[CHI_KEY] = [0.5, 0.5, 0.0]
     estimate_dose_mixture(adata, type_key="cell_type")
-    assert set(adata.obs["ambidose_mixture_profile"]) == {"empty"}
+    assert set(adata.obs["ambidose_mixture_profile"]) == {"chi_deconv"}
     selected = adata.obs["ambidose_rho_mixture"].to_numpy()
     np.testing.assert_allclose(selected, adata.obs["ambidose_rho_mixture_empty"].to_numpy())
 
@@ -631,7 +631,7 @@ def test_mixture_one_type_without_chi_raises():
         estimate_dose_mixture(adata, type_key="cell_type")
 
 
-def test_mixture_keeps_leave_one_type_when_ambient_is_a_type_blend():
+def test_mixture_deconv_recovers_type_blend_ambient():
     from anndata import AnnData
     from scipy import sparse
 
@@ -653,7 +653,7 @@ def test_mixture_keeps_leave_one_type_when_ambient_is_a_type_blend():
     adata.obs["ambidose_droplet"] = "cell"
     adata.var[CHI_KEY] = [1 / 3, 1 / 3, 1 / 3]
     estimate_dose_mixture(adata, type_key="cell_type")
-    assert set(adata.obs["ambidose_mixture_profile"]) == {"cell"}
+    assert set(adata.obs["ambidose_mixture_profile"]) == {"chi_deconv"}
     np.testing.assert_allclose(
         adata.obs["ambidose_rho_mixture"].to_numpy(),
         adata.obs["ambidose_rho_mixture_cell"].to_numpy(),

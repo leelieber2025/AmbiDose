@@ -13,11 +13,13 @@ from scipy.special import ndtr
 from ._dose import SOUP_ONLY_MAX_RT, U_MAX_LIBRARY_FRAC, _top_chi_indices, _unexpressed_mask
 from ._shared import (
     _DENSE_WORKSPACE_RAM_FRACTION,
+    CHI_MASS_SINGLE_WINNER,
     EMPTY_TYPES,
     MIN_PROTECTED_CHI,
     MIN_TYPE_CELLS,
     NATIVE_SOUP_RATIO,
     OWNER_FRAGMENT_MIN_SHARE_FOLD,
+    OWNER_GAP_SE_Z,
     OWNER_MIN_FOLD,
     OWNER_TOP_K,
     _available_ram_bytes,
@@ -27,6 +29,35 @@ from ._shared import (
 )
 
 _MT_GENE_RE = re.compile(r"(^|_)mt[-_]", re.IGNORECASE)
+
+
+def _chi_mass_prefix_mask(chi: np.ndarray, mass: float = CHI_MASS_SINGLE_WINNER) -> np.ndarray:
+    """True on the smallest χ-sorted prefix whose mass is at least ``mass``."""
+    chi = np.asarray(chi, dtype=np.float64)
+    high = np.zeros(chi.size, dtype=bool)
+    if chi.size == 0:
+        return high
+    order = np.argsort(-chi)
+    total = float(chi[order].sum())
+    if total <= 0:
+        return high
+    n = int(np.searchsorted(np.cumsum(chi[order]), mass * total, side="left")) + 1
+    high[order[:n]] = True
+    return high
+
+
+def _restrict_high_chi_to_single_winner(
+    masks: dict[str, np.ndarray],
+    masks_sw: dict[str, np.ndarray],
+    chi: np.ndarray,
+    *,
+    mass: float = CHI_MASS_SINGLE_WINNER,
+) -> dict[str, np.ndarray]:
+    """Gap-cascade ownership, except soup-mass genes use unique argmax."""
+    high = _chi_mass_prefix_mask(chi, mass)
+    if not high.any():
+        return masks
+    return {name: np.where(high, masks_sw[name], masks[name]) for name in masks}
 
 
 def _mt_gene_mask(var_names) -> np.ndarray:
@@ -338,6 +369,8 @@ def _exclusive_owner_masks(
     member_of: np.ndarray,
     *,
     max_type_mean: float,
+    group_se: np.ndarray | None = None,
+    se_z: float = OWNER_GAP_SE_Z,
 ) -> dict[str, np.ndarray]:
     """Owner group(s) per gene: a bottom-up gap cascade, not just the
     single global argmax.
@@ -375,6 +408,26 @@ def _exclusive_owner_masks(
     gets unconditional protection (``native_confidence=1.0``) for a gene it
     doesn't actually express -- directly protecting ambient contamination
     of an off-target gene from subtraction.
+
+    ``group_se`` (optional, one row per meta-group, same shape as
+    ``group_means``) widens the gap test by ``se_z`` standard errors on
+    each side before comparing to ``OWNER_MIN_FOLD``: a candidate gap only
+    counts if it survives under the *most conservative* reading of both
+    group means, not just their point estimates. Two groups whose raw
+    means happen to sit on either side of the 1.2-fold line by an amount
+    within their own sampling noise are otherwise a coin flip -- verified
+    directly on GSE218853 (Itm2b): Proximal_tubule's mean sits at 7.48
+    against neighbouring Stromal's 6.87 in one replicate (owned, ratio
+    1.09, decided by a *different*, well-separated gap further down) and
+    at 13.30 against Stromal's 15.98 in another replicate of the same
+    tissue (ratio 1.201, barely over ``OWNER_MIN_FOLD``, unowned) -- a
+    rank swap between two means whose per-cell standard errors (0.06-1.25)
+    show they are not distinguishable, not a real biological difference
+    between replicates. Without ``group_se`` the cascade treats both as
+    equally confident decisions; with it, a gap that cannot clear the fold
+    test even under conservative bounds is skipped and the scan continues
+    for one that can, rather than resolving a statistical tie by which way
+    the point estimate happened to fall.
     """
     names = list(type_means)
     stacked = np.asarray(group_means)
@@ -385,9 +438,15 @@ def _exclusive_owner_masks(
         n_meta = stacked.shape[0]
         order = np.argsort(-stacked, axis=0)
         sorted_vals = np.take_along_axis(stacked, order, axis=0)
+        if group_se is not None:
+            sorted_se = np.take_along_axis(np.asarray(group_se), order, axis=0)
+            lower_vals = sorted_vals - se_z * sorted_se
+            upper_vals = sorted_vals + se_z * sorted_se
+        else:
+            lower_vals = upper_vals = sorted_vals
         cutoff_rank = np.full(n_genes, -1, dtype=np.int64)
         for r in range(n_meta - 1, 0, -1):
-            ratio_ok = sorted_vals[r - 1] >= OWNER_MIN_FOLD * np.maximum(sorted_vals[r], 1e-9)
+            ratio_ok = lower_vals[r - 1] >= OWNER_MIN_FOLD * np.maximum(upper_vals[r], 1e-9)
             newly_set = ratio_ok & (cutoff_rank == -1)
             cutoff_rank[newly_set] = r - 1
         top_val = sorted_vals[np.clip(cutoff_rank, 0, n_meta - 1), np.arange(n_genes)]
@@ -679,18 +738,38 @@ def _dominant_owner_masks(
     labels = _split_noise_meta_ids(x, n, names, idx_map, cell_keys=cell_keys, n_splits=n_splits)
     n_meta = int(np.unique(labels).size)
 
+    # Per-fragment sampling variance of the mean (Bessel-corrected SD /
+    # sqrt(n)), pooled up to whichever meta-group each fragment lands in.
+    # Feeds _exclusive_owner_masks's gap test so a fold that only clears
+    # 1.2x by an amount smaller than the groups' own noise doesn't get
+    # treated as a resolved ownership decision (see that function's
+    # docstring for the GSE218853 case this fixes).
+    sizes_arr = np.asarray(sizes, dtype=np.float64)
+    frag_var = np.vstack(
+        [
+            _type_sd(x, idx_map[name], type_means[name]) ** 2 / max(idx_map[name].size, 1)
+            for name in names
+        ]
+    )
     if n_meta < 2:
         group_means, member_of = raw_means, np.arange(len(names))
+        group_se = np.sqrt(frag_var)
     else:
         meta_means = []
+        meta_se = []
         for lab in range(n_meta):
             members = np.flatnonzero(labels == lab)
-            meta_means.append(
-                np.average(raw_means[members], axis=0, weights=np.asarray(sizes)[members])
-            )
+            w = sizes_arr[members]
+            meta_means.append(np.average(raw_means[members], axis=0, weights=w))
+            # Var of a weighted mean of independent fragments, weights=sizes.
+            pooled_var = np.sum((w[:, None] ** 2) * frag_var[members], axis=0) / (w.sum() ** 2)
+            meta_se.append(np.sqrt(pooled_var))
         group_means, member_of = np.vstack(meta_means), labels
+        group_se = np.vstack(meta_se)
 
-    masks = _exclusive_owner_masks(group_means, type_means, member_of, max_type_mean=max_type_mean)
+    masks = _exclusive_owner_masks(
+        group_means, type_means, member_of, max_type_mean=max_type_mean, group_se=group_se
+    )
     if not also_single_winner:
         return masks, n_meta
     masks_sw = _single_winner_owner_masks(

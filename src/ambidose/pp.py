@@ -67,6 +67,7 @@ from ._ownership import (
     _dominant_owner_masks,
     _mt_gene_mask,
     _p_set_is_soup_like,
+    _restrict_high_chi_to_single_winner,
     _type_masks,
 )
 from ._ownership import (
@@ -1702,6 +1703,9 @@ def subtract(
                 max_type_mean=max_type_mean,
                 also_single_winner=True,
             )
+            dominant_masks = _restrict_high_chi_to_single_winner(
+                dominant_masks, dominant_masks_sw, chi
+            )
             sample_n_meta = int(n_meta_s)
             native_everywhere = _native_everywhere_mask(
                 x,
@@ -2428,8 +2432,9 @@ def denoise(
     external APIs. Fine clusters are not an upgrade.
     Dose selection keeps the fixed estimate when it agrees with the internal
     mixture estimate and uses the mixture estimate on large disagreement.
-    The mixture estimator itself chooses leave-one-type ambient unless that
-    profile is a single other cell type, in which case it uses empty-droplet χ.
+    The mixture estimator itself fits each type's own χ-deconvolved ambient
+    reference (χ with that type's NNLS-estimated self-contamination share
+    subtracted back out, not a leave-one-type profile of the other types).
     A sample with one cell type uses the untyped χ quantile floor instead of
     a two-component fit.
     ``estimate_dose()`` remains the fixed quantile-floor estimator used inside
