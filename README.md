@@ -47,7 +47,7 @@ the QC report before using it as a contamination rate.
 
 ## Status
 
-**0.3.1 (Alpha).** Import as `import ambidose as amdose`. The entry point is
+**0.5.1 (Alpha).** Import as `import ambidose as amdose`. The entry point is
 `denoise()`. See the
 [API reference](https://ambidose.readthedocs.io/en/latest/api/index.html).
 
@@ -61,7 +61,7 @@ the QC report before using it as a contamination rate.
 
 ## Citation
 
-Pin the package version used in the analysis, for example `ambidose==0.3.1`.
+Pin the package version used in the analysis, for example `ambidose==0.5.1`.
 Software record: [10.5281/zenodo.22278199](https://doi.org/10.5281/zenodo.22278199).
 See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/latest/citation.html).
 
@@ -70,7 +70,7 @@ See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/la
   title   = {AmbiDose: per-cell ambient dose removal for droplet scRNA-seq},
   author  = {Li, Zhao},
   year    = {2026},
-  version = {0.3.1},
+  version = {0.5.1},
   doi     = {10.5281/zenodo.22278199},
   url     = {https://doi.org/10.5281/zenodo.22278199},
 }

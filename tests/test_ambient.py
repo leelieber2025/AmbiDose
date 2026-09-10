@@ -24,9 +24,9 @@ def test_emptydrops_bh_excludes_always_retained_barcodes(monkeypatch):
     x = sparse.csr_matrix([[3, 2]] * 15 + [[6, 4], [7, 4], [12, 8], [13, 8]])
     totals = np.asarray(x.sum(axis=1)).ravel()
     seen = []
-    monkeypatch.setattr("ambidose.pp._barcode_knee_umi", lambda *args, **kwargs: 20.0)
+    monkeypatch.setattr("ambidose._droplets._barcode_knee_umi", lambda *args, **kwargs: 20.0)
     monkeypatch.setattr(
-        "ambidose.pp._multinomial_mc_pvals",
+        "ambidose._droplets._multinomial_mc_pvals",
         lambda *_args, **_kwargs: np.array([0.01, 0.01]),
     )
 
@@ -34,7 +34,7 @@ def test_emptydrops_bh_excludes_always_retained_barcodes(monkeypatch):
         seen.append(len(pvals))
         return np.asarray(pvals)
 
-    monkeypatch.setattr("ambidose.pp._bh_fdr", bh)
+    monkeypatch.setattr("ambidose._droplets._bh_fdr", bh)
     keep = _empty_drops_keep(x, totals, lower=5, fdr=0.05)
     assert seen == [2]
     assert keep[-4:].all()
@@ -48,7 +48,7 @@ def test_whitelist_chi_tests_low_umi_candidates(monkeypatch):
     seen = []
 
     monkeypatch.setattr(
-        "ambidose.pp._barcode_rank_curve",
+        "ambidose._droplets._barcode_rank_curve",
         lambda *args, **kwargs: {"inflection_umi": 101.0},
     )
 
@@ -56,7 +56,7 @@ def test_whitelist_chi_tests_low_umi_candidates(monkeypatch):
         seen.extend(_totals[test].tolist())
         return np.zeros(int(test.sum()))
 
-    monkeypatch.setattr("ambidose.pp._multinomial_mc_pvals", accept_all)
+    monkeypatch.setattr("ambidose._droplets._multinomial_mc_pvals", accept_all)
     keep, _ = _whitelist_vs_chi_keep(x, totals, in_white, lower=100)
     assert seen == [50, 75, 100]
     assert keep[in_white].all()

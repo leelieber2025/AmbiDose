@@ -6,6 +6,162 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
+from ._shared import MIN_TYPE_CELLS
+
+# Blend weight for dose-enrichment scaling of unowned rank-1 and soupOnly
+# takes. 0 keeps the pooled take; 1 replaces it with take × max(Pearson(y/n, ρ), 0).
+ENRICH_STRENGTH = 0.1
+# Pre-enrich take/capacity at or above this is type-pooled; below it, rank-1
+# take is spent inside each cell so fractional χ-budget is not taken from
+# other cells of the same type.
+SAT_FRAC = 1.0
+# Unbounded soupOnly extra-clear covers this χ-mass prefix of U genes.
+# Ownership single-winner stays at CHI_MASS_SINGLE_WINNER (0.15). Wider
+# extra-clear recovers soup-dominant markers (e.g. globin) that sit
+# outside the 15% prefix and were remaining-d_c capped.
+SOUP_ONLY_CHI_MASS = 0.8
+# Promoted in 0.3.13: gate _type_masks's abundant_collision/ceiling exception
+# (protects a gene whose type mean approaches the ρ=1 ambient ceiling) on
+# cross-type specificity via _ownership._ceiling_cross_type_gate (median-of-
+# others background comparison), so a type with genuinely elevated per-cell
+# ρ can no longer get unconditional protection on pure soup just because no
+# other type happens to be compared. See _ownership._type_masks's
+# ceiling_gate docstring and DEVLOG.md's 2026-09-09 entries for the full
+# design history (a rejected single-winner version, the T-cell/NK false-
+# competition root cause, and the median redesign's full-suite evaluation
+# before promotion: fetal erythroid Hb and realistic_gt clustering-quality
+# regressions eliminated; GSE218853 macro ARS/ERS cost real but halved
+# from the rejected version, +2.0pp/-1.6pp, judged acceptable).
+CEILING_CROSS_TYPE_GATE = True
+
+
+def _high_chi_u_mask(
+    is_u: np.ndarray, chi: np.ndarray, mass: float = SOUP_ONLY_CHI_MASS
+) -> np.ndarray:
+    """U genes inside the smallest χ-prefix covering ``mass`` of total χ."""
+    from ._ownership import _chi_mass_prefix_mask
+
+    return np.asarray(is_u, dtype=bool) & _chi_mass_prefix_mask(chi, mass)
+
+
+def _revoke_u_with_expressing_subset(
+    x,
+    idx: np.ndarray,
+    library: np.ndarray,
+    chi: np.ndarray,
+    is_u: np.ndarray,
+    *,
+    min_cells: int = MIN_TYPE_CELLS,
+) -> np.ndarray:
+    """Drop high-χ U when a subset of the type exceeds the type χ ceiling.
+
+    Type-mean U gates miss a native minority merged into a larger type:
+    the mean is diluted below n̄χ, soupOnly then wipes the minority.
+    Compare to n̄χ, not n_c χ: native cells' own identity UMIs inflate
+    n_c so y < n_c χ even when they clearly express the gene.
+    """
+    is_u = np.asarray(is_u, dtype=bool).copy()
+    idx = np.asarray(idx, dtype=np.int64)
+    genes = np.flatnonzero(_high_chi_u_mask(is_u, chi))
+    if genes.size == 0 or idx.size < min_cells:
+        return is_u
+    n = np.clip(np.asarray(library, dtype=np.float64)[idx], 1e-12, None)
+    block = x[idx][:, genes]
+    y = np.asarray(block.toarray() if sparse.issparse(block) else block, dtype=np.float64)
+    thresh = float(n.mean()) * np.asarray(chi, dtype=np.float64)[genes]
+    n_hot = np.count_nonzero(y > thresh[None, :], axis=0)
+    is_u[genes[n_hot >= int(min_cells)]] = False
+    return is_u
+
+
+def _cap_take_to_remaining(take: np.ndarray, remaining: np.ndarray) -> np.ndarray:
+    """Scale a type-pooled take so it cannot exceed remaining per-cell dose."""
+    take = np.asarray(take, dtype=np.float64).copy()
+    cap = float(np.clip(np.asarray(remaining, dtype=np.float64), 0.0, None).sum())
+    tgt = float(take.sum())
+    if cap <= 0.0 or tgt <= 0.0:
+        take[:] = 0.0
+        return take
+    if tgt > cap:
+        take *= cap / tgt
+    return take
+
+
+def _dose_enrichment_scales(
+    x, idx, take: np.ndarray, dose: np.ndarray, library: np.ndarray
+) -> np.ndarray:
+    """Per-gene scale in [0, 1] = max(Pearson(y/n, ρ), 0) within a type."""
+    scales = np.ones(take.shape[0], dtype=np.float64)
+    genes = np.flatnonzero(take > 1e-12)
+    if genes.size == 0 or idx.size < 3:
+        return scales
+    n = np.clip(np.asarray(library, dtype=np.float64)[idx], 1e-12, None)
+    rho = np.asarray(dose, dtype=np.float64)[idx] / n
+    rho_c = rho - rho.mean()
+    var_rho = float(np.dot(rho_c, rho_c))
+    if var_rho <= 0:
+        return scales
+    block = x[idx][:, genes].tocsr()
+    inv_n = 1.0 / n
+    rate = block.multiply(inv_n[:, np.newaxis])
+    mean_rate = np.asarray(rate.mean(axis=0)).ravel()
+    cov = np.asarray(rate.T.dot(rho_c)).ravel()
+    sum_sq = np.asarray(rate.multiply(rate).sum(axis=0)).ravel()
+    var_rate = np.maximum(sum_sq - idx.size * mean_rate**2, 0.0)
+    corr = np.zeros(genes.size, dtype=np.float64)
+    ok = var_rate > 0
+    corr[ok] = cov[ok] / np.sqrt(var_rate[ok] * var_rho)
+    scales[genes] = np.clip(corr, 0.0, None)
+    return scales
+
+
+def _preserve_take_sum(
+    take: np.ndarray, mass: float, observed: np.ndarray | None = None
+) -> np.ndarray:
+    """Scale ``take`` so its sum is ``mass``, optionally clipped to observed."""
+    take = np.asarray(take, dtype=np.float64).copy()
+    mass = float(mass)
+    if mass <= 0:
+        take[:] = 0.0
+        return take
+    tgt = float(take.sum())
+    if tgt <= 0:
+        return take
+    take *= mass / tgt
+    if observed is not None:
+        take = np.minimum(take, np.asarray(observed, dtype=np.float64))
+        tgt = float(take.sum())
+        if tgt > mass:
+            take *= mass / tgt
+    return take
+
+
+def _apply_dose_enrichment(
+    x,
+    idx,
+    take: np.ndarray,
+    dose: np.ndarray,
+    library: np.ndarray,
+    *,
+    strength: float = ENRICH_STRENGTH,
+    renormalize: bool = False,
+    observed: np.ndarray | None = None,
+) -> np.ndarray:
+    """Reweight unowned pooled take when counts do not track per-cell dose.
+
+    Default shrinks the type take. ``renormalize`` keeps the original sum
+    (responsibility is allocation, not a smaller budget).
+    """
+    take = np.asarray(take, dtype=np.float64)
+    if strength <= 0:
+        return take.copy()
+    mass = float(take.sum())
+    scales = _dose_enrichment_scales(x, idx, take, dose, library)
+    out = (1.0 - strength) * take + strength * take * scales
+    if renormalize:
+        return _preserve_take_sum(out, mass, observed)
+    return out
+
 
 def _alloc_budget(tgt: float, room: np.ndarray, ws: np.ndarray) -> np.ndarray:
     """Spend ``tgt`` on buckets with capacity ``room``, weights ``ws``.
@@ -84,18 +240,55 @@ def _realloc_unspent_rank1(
     dose: float,
     is_p: np.ndarray,
     is_u: np.ndarray,
+    r_t: np.ndarray | None = None,
+    *,
+    leftover_cap: float | None = None,
 ) -> np.ndarray:
     """Spend leftover χ-budget on non-protected, non-soupOnly genes.
 
     Protected genes keep their rank-1 slice. U genes stay on the soupOnly
     path. Leftover is the unused part of ``dose`` after the clipped take.
+
+    ``r_t`` (``mean/expected``, from :func:`_type_masks`) down-weights genes
+    whose observed level sits well above the pure-ambient ceiling even
+    though they didn't clear the ``native_confidence`` significance test --
+    an under-powered real marker (r_t >> 1) should not be treated the same
+    as a gene that genuinely looks like ambient (r_t ~= 1) just because
+    both failed to reach significance. Without this, leftover mass
+    concentrates on whichever unprotected genes have the highest χ,
+    regardless of how implausible "this is pure ambient" already looks for
+    that specific gene -- the mechanism behind on-target markers (e.g. a
+    cell-type's own canonical genes in an under-powered cluster) being
+    fully zeroed out by reallocation despite never being flagged is_u.
+
+    A flat per-gene fold cap (a multiple of the gene's own base rank-1
+    share) was tried and rejected: on real kidney data, the "legitimate"
+    and "harmful" realloc multiples occupy the *same* range (median 2.96x,
+    p90 5.76x across ~400k real gene-cluster events) -- there is no
+    magnitude threshold that separates them, so any cap tight enough to
+    matter for kidney/fetal-liver also costs must-win, and any cap loose
+    enough to spare must-win (5x, at the measured p90) does not move
+    kidney/fetal-liver's aggregate leak_ratio at all (see CHANGELOG).
+
+    ``leftover_cap``, when given, bounds the *total* leftover actually
+    redistributed (not any one gene's share of it) -- the caller computes
+    what leftover the frozen single-winner ownership rule would have
+    produced and passes it here, so the gap-cascade's wider ownership
+    (more genes protected per type) can never push realloc's total
+    footprint past what the already-validated baseline had. This is a
+    structural cap tied to *why* extra leftover exists (newly-protected
+    genes freeing up budget), not to any single gene's magnitude.
     """
     leftover = max(0.0, float(dose) - float(np.sum(take)))
+    if leftover_cap is not None:
+        leftover = min(leftover, max(0.0, float(leftover_cap)))
     if leftover <= 0:
         return take
     blocked = is_p | is_u
     room = np.where(blocked, 0.0, np.maximum(observed - take, 0.0))
     weights = np.where(blocked, 0.0, chi)
+    if r_t is not None:
+        weights = weights / np.maximum(1.0, r_t)
     return take + _alloc_budget(leftover, room, weights)
 
 
@@ -152,8 +345,8 @@ def _alloc_integer_budget_validated(
 
 def _integerize_corrected(raw, corrected, *, gene_keys):
     """Convert continuous removal to deterministic integer UMI removal per cell."""
-    raw = raw.tocsr(copy=True)
-    corrected = corrected.tocsr(copy=True)
+    raw = raw.tocsr(copy=False)
+    corrected = corrected.tocsr(copy=False)
     if not (
         np.array_equal(raw.indptr, corrected.indptr)
         and np.array_equal(raw.indices, corrected.indices)
@@ -200,6 +393,54 @@ def _selected_data_positions(x, rows: np.ndarray):
     )
 
 
+def _pre_enrich_sat_mask(
+    take: np.ndarray, observed: np.ndarray, sat_frac: float = SAT_FRAC
+) -> np.ndarray:
+    """Genes whose type-level take already meets ``sat_frac`` of observed capacity."""
+    take = np.asarray(take, dtype=np.float64)
+    observed = np.asarray(observed, dtype=np.float64)
+    return (take > 1e-12) & (take / np.maximum(observed, 1e-12) >= sat_frac)
+
+
+def _expand_unsat_cell_carry(
+    x,
+    idx: np.ndarray,
+    take_g: np.ndarray,
+    weights: np.ndarray,
+    *,
+    data_positions,
+    gene_names: np.ndarray,
+) -> None:
+    """Spend unsaturated type take as per-cell budgets across remaining genes."""
+    gidx = np.flatnonzero(take_g > 1e-12)
+    if gidx.size == 0 or idx.size == 0:
+        return
+    w = np.clip(np.asarray(weights, dtype=np.float64), 0.0, None)
+    w_sum = float(w.sum())
+    if w_sum <= 0:
+        return
+    budget = w * (float(take_g[gidx].sum()) / w_sum)
+    gene_w = take_g[gidx]
+    names = np.asarray(gene_names).astype(str)[gidx]
+    loc = data_positions[idx][:, gidx].tocsr()
+    for i in range(idx.size):
+        if budget[i] <= 1e-12:
+            continue
+        a, b = int(loc.indptr[i]), int(loc.indptr[i + 1])
+        if a == b:
+            continue
+        data_idx = loc.data[a:b]
+        local_genes = loc.indices[a:b]
+        room = np.rint(x.data[data_idx]).astype(np.int64)
+        take_i = _alloc_integer_budget(
+            float(budget[i]),
+            room.astype(float),
+            gene_w[local_genes],
+            tie_keys=names[local_genes],
+        )
+        x.data[data_idx] = room - take_i
+
+
 def _expand_take_to_cells(
     x,
     idx: np.ndarray,
@@ -208,8 +449,39 @@ def _expand_take_to_cells(
     *,
     data_positions=None,
     cell_keys=None,
+    sat_mask=None,
+    gene_names=None,
 ) -> None:
-    """Write type-level take through sparse gene columns onto CSR data."""
+    """Write type-level take through sparse gene columns onto CSR data.
+
+    ``sat_mask`` True genes stay on the type-level integer allocator.
+    The rest of a positive take is spent inside each cell (unsaturated
+    rank-1). ``sat_mask is None`` type-pools every gene.
+    """
+    take_g = np.asarray(take_g, dtype=np.float64)
+    if sat_mask is not None:
+        sat_mask = np.asarray(sat_mask, dtype=bool)
+        if sat_mask.shape != take_g.shape:
+            raise ValueError("sat_mask must match take_g")
+        if gene_names is None:
+            raise ValueError("gene_names required when sat_mask is set")
+        take_sat = np.where(sat_mask, take_g, 0.0)
+        take_unsat = np.where(~sat_mask, take_g, 0.0)
+        _expand_take_to_cells(
+            x, idx, take_sat, weights, data_positions=data_positions, cell_keys=cell_keys
+        )
+        idx = np.asarray(idx, dtype=np.int64)
+        x.sort_indices()
+        if data_positions is None:
+            data_positions = sparse.csr_matrix(
+                (np.arange(x.nnz, dtype=np.int64), x.indices, x.indptr),
+                shape=x.shape,
+                copy=False,
+            )
+        _expand_unsat_cell_carry(
+            x, idx, take_unsat, weights, data_positions=data_positions, gene_names=gene_names
+        )
+        return
     gidx = np.flatnonzero(take_g > 1e-12)
     if gidx.size == 0 or idx.size == 0:
         return

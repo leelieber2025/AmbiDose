@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from ambidose._budget import _realloc_unspent_rank1
+from ambidose._budget import _cap_take_to_remaining, _realloc_unspent_rank1
 from ambidose.datasets import make_barnyard_toy, make_toy
 from ambidose.metrics import assign_majority_genome, barnyard_kill_row, leakage_by_species
 from ambidose.pp import (
@@ -125,7 +125,17 @@ def test_native_confidence_continuously_interpolates_removal():
 
 
 def test_relax_hk_increases_high_rho_removal_and_default_off():
-    adata = make_toy(n_samples=1, n_empty=60, n_cells=80, n_genes=60, contamination=0.7, seed=1)
+    """relax_hk_when_soup_like still has an isolated, measurable effect.
+
+    contamination=0.9, not the original 0.7: at 0.7 the cross-type gate
+    (0.3.13+) already prunes `is_p` enough on its own that
+    `_p_set_is_soup_like` no longer fires for `frozen`, so `trial`'s
+    relax_hk retry never triggers either and the two converge exactly --
+    a real, expected interaction between the two mechanisms, not a bug,
+    but it defeats this test's purpose. 0.9 keeps `_p_set_is_soup_like`
+    triggering so relax_hk's own marginal effect is still measurable.
+    """
+    adata = make_toy(n_samples=1, n_empty=60, n_cells=80, n_genes=60, contamination=0.9, seed=1)
     cells = adata.obs_names[adata.obs["droplet"].astype(str) == "cell"].tolist()
     denoise(adata, cell_barcodes=cells, type_key="cell_type", sample_key=None)
     mask = adata.obs["ambidose_droplet"].astype(str).to_numpy() == "cell"
@@ -392,6 +402,33 @@ def test_soup_only_does_not_wipe_abundant_ceiling_collision():
     subtract(ad, type_key="cell_type")
     den = ad.layers["ambidose_denoised"].toarray()
     assert (den[:, 1] >= 70.0).all()
+
+
+def test_chi_mass_prefix_mask_covers_requested_mass():
+    from ambidose._ownership import _chi_mass_prefix_mask
+
+    chi = np.array([0.10, 0.05, 0.01, 0.84])
+    high = _chi_mass_prefix_mask(chi, 0.15)
+    assert high.tolist() == [False, False, False, True]
+    high90 = _chi_mass_prefix_mask(chi, 0.90)
+    assert high90[3] and high90[0]
+
+
+def test_restrict_high_chi_to_single_winner_only_on_prefix():
+    from ambidose._ownership import _restrict_high_chi_to_single_winner
+
+    chi = np.array([0.80, 0.10, 0.05, 0.05])
+    gap = {
+        "a": np.array([True, True, False, False]),
+        "b": np.array([True, False, True, False]),
+    }
+    sw = {
+        "a": np.array([True, False, False, False]),
+        "b": np.array([False, False, True, False]),
+    }
+    out = _restrict_high_chi_to_single_winner(gap, sw, chi, mass=0.15)
+    assert out["a"][0] and not out["b"][0]
+    assert out["a"][1] and not out["b"][1]
 
 
 def test_dominant_owner_is_shared_only_within_half_split_noise():
@@ -685,25 +722,35 @@ def test_unowned_uniform_gene_is_soup_cleared():
     ad.obs["n_umi"] = np.asarray(ad.X.sum(axis=1)).ravel()
     subtract(ad, type_key="cell_type")
     den = ad.layers["ambidose_denoised"].toarray()
-    assert (den[:, 2] == 0.0).all()
+    raw_g2 = ad.X.toarray()[:, 2]
+    # soupOnly extra-clear is dose-enrichment scaled: a uniform unowned gene
+    # is reduced, but cells whose counts do not track ρ are not required to
+    # hit exact zero.
+    assert (den[:, 2] <= raw_g2).all()
+    assert den[:, 2].sum() < raw_g2.sum()
     assert (den[:n, 0] >= 380.0).all()
     assert (den[n:, 1] >= 380.0).all()
 
 
 def test_soup_only_skipped_when_type_rho_below_floor():
-    """Type ρ < 0.01: U genes keep rank-1 only, not extra-clear to zero."""
+    """Type ρ < 0.01: U genes keep rank-1 only, not extra-clear to zero.
+
+    Single type: g2 was identically-expressed across both original types
+    (r_t tied), which the cross-type gate (0.3.13+) correctly reads as no
+    type-specific evidence -- a separate mechanism from the ρ-floor rule
+    this test targets. One type isolates the latter.
+    """
     from anndata import AnnData
 
     from ambidose.pp import CHI_KEY, DOSE_KEY
 
     n = 20
     t0 = np.tile([400.0, 10.0, 8.0], (n, 1))
-    t1 = np.tile([10.0, 400.0, 8.0], (n, 1))
-    ad = AnnData(sparse.csr_matrix(np.vstack([t0, t1])))
+    ad = AnnData(sparse.csr_matrix(t0))
     ad.var_names = ["g0", "g1", "g2"]
-    ad.obs_names = [f"c{i}" for i in range(2 * n)]
+    ad.obs_names = [f"c{i}" for i in range(n)]
     ad.obs["ambidose_droplet"] = "cell"
-    ad.obs["cell_type"] = ["t0"] * n + ["t1"] * n
+    ad.obs["cell_type"] = ["t0"] * n
     ad.var[CHI_KEY] = np.array([0.02, 0.02, 0.4]) / 0.44
     ad.obs[DOSE_KEY] = 2.0
     ad.obs["n_umi"] = np.asarray(ad.X.sum(axis=1)).ravel()
@@ -713,8 +760,115 @@ def test_soup_only_skipped_when_type_rho_below_floor():
     assert float(den[:, 2].mean()) < 8.0
 
 
-def test_soup_only_extra_clear_is_not_scaled_back_to_dose():
-    """U-gene extra-clear may exceed d_c; the old row cap put soup back."""
+def test_cap_take_to_remaining_scales_and_zeros():
+    take = np.array([10.0, 0.0, 30.0])
+    assert _cap_take_to_remaining(take, np.array([5.0, 5.0])).sum() == pytest.approx(10.0)
+    assert _cap_take_to_remaining(take, np.zeros(2)).sum() == 0.0
+    assert _cap_take_to_remaining(take, np.array([100.0])).sum() == pytest.approx(40.0)
+
+
+def test_revoke_u_when_subset_exceeds_cell_chi_ceiling():
+    from ambidose._budget import _revoke_u_with_expressing_subset
+
+    n = 30
+    y = np.zeros((n, 2), dtype=float)
+    y[:, 0] = 1.0
+    y[:12, 1] = 90.0
+    x = sparse.csr_matrix(y)
+    library = np.full(n, 100.0)
+    chi = np.array([0.20, 0.80])
+    is_u = np.array([True, True])
+    out = _revoke_u_with_expressing_subset(x, np.arange(n), library, chi, is_u, min_cells=10)
+    assert out.tolist() == [True, False]
+
+
+def test_mixed_type_high_chi_subset_is_not_soup_wiped():
+    """Native minority in a mixed type keeps high-χ identity genes."""
+    from anndata import AnnData
+
+    from ambidose.pp import CHI_KEY, DOSE_KEY
+
+    n_native, n_other = 15, 40
+    native = np.tile([20.0, 5.0, 250.0], (n_native, 1))
+    other = np.tile([20.0, 80.0, 1.0], (n_other, 1))
+    t1 = np.tile([5.0, 5.0, 250.0], (20, 1))
+    ad = AnnData(sparse.csr_matrix(np.vstack([native, other, t1])))
+    ad.var_names = ["g0", "g1", "g2"]
+    ad.obs_names = [f"c{i}" for i in range(ad.n_obs)]
+    ad.obs["ambidose_droplet"] = "cell"
+    ad.obs["cell_type"] = ["mixed"] * (n_native + n_other) + ["owner"] * 20
+    ad.var[CHI_KEY] = np.array([0.10, 0.10, 0.80])
+    ad.obs[DOSE_KEY] = 15.0
+    ad.obs["n_umi"] = np.asarray(ad.X.sum(axis=1)).ravel()
+    ad.uns["ambidose"] = {
+        "dose_type_key": "cell_type",
+        "dose_provenance": {
+            "type_key": "cell_type",
+            "sample_key": None,
+            "layer": None,
+            "droplet_key": "ambidose_droplet",
+            "cell_label": "cell",
+        },
+    }
+    subtract(ad, type_key="cell_type", droplet_key="ambidose_droplet")
+    den = ad.layers["ambidose_denoised"].toarray()
+    assert den[:n_native, 2].mean() > 40.0
+
+
+def test_high_chi_u_mask_is_u_inside_chi_prefix():
+    from ambidose._budget import SOUP_ONLY_CHI_MASS, _high_chi_u_mask
+
+    chi = np.array([0.4, 0.4, 0.2])
+    is_u = np.array([False, False, True])
+    assert _high_chi_u_mask(is_u, chi).tolist() == [False, False, False]
+    chi_hi = np.array([0.05, 0.05, 0.90])
+    assert _high_chi_u_mask(is_u, chi_hi).tolist() == [False, False, True]
+    # Default extra-clear prefix is wider than ownership 0.15 but still
+    # excludes a 20% tail gene when the top two genes already cover 0.8.
+    assert SOUP_ONLY_CHI_MASS >= 0.8
+
+
+def test_soup_only_low_chi_extra_clear_stays_inside_remaining_dose():
+    """Low-χ soupOnly cannot spend past remaining d_c; do not restore by row scaling."""
+    from anndata import AnnData
+
+    from ambidose.pp import CHI_KEY, DOSE_KEY
+
+    n = 20
+    t0 = np.tile([80.0, 1.0, 40.0], (n, 1))
+    t1 = np.tile([1.0, 80.0, 40.0], (n, 1))
+    ad = AnnData(sparse.csr_matrix(np.vstack([t0, t1])))
+    ad.var_names = ["g0", "g1", "g2"]
+    ad.obs_names = [f"c{i}" for i in range(2 * n)]
+    ad.obs["ambidose_droplet"] = "cell"
+    ad.obs["cell_type"] = ["t0"] * n + ["t1"] * n
+    # g0/g1 hold the χ-mass prefix; g2 is U but outside that prefix.
+    ad.var[CHI_KEY] = np.array([0.40, 0.40, 0.20])
+    ad.obs[DOSE_KEY] = 15.0
+    ad.obs["n_umi"] = np.asarray(ad.X.sum(axis=1)).ravel()
+    ad.uns["ambidose"] = {
+        "dose_type_key": "cell_type",
+        "dose_provenance": {
+            "type_key": "cell_type",
+            "sample_key": None,
+            "layer": None,
+            "droplet_key": "ambidose_droplet",
+            "cell_label": "cell",
+        },
+    }
+    raw = ad.X.toarray()
+    subtract(ad, type_key="cell_type", droplet_key="ambidose_droplet")
+    den = ad.layers["ambidose_denoised"].toarray()
+    removed = ad.obs["ambidose_removed_umi"].to_numpy()
+    assert (den <= raw + 1e-9).all()
+    assert den[:, 2].sum() < raw[:, 2].sum()
+    assert (den[:n, 0] >= 79.0).all()
+    assert (den[n:, 1] >= 79.0).all()
+    assert (removed <= 16.0).all()
+
+
+def test_soup_only_high_chi_extra_clear_is_not_remaining_capped():
+    """High-χ U extra-clear is not scaled to remaining d_c."""
     from anndata import AnnData
 
     from ambidose.pp import CHI_KEY, DOSE_KEY
@@ -740,13 +894,15 @@ def test_soup_only_extra_clear_is_not_scaled_back_to_dose():
             "cell_label": "cell",
         },
     }
+    raw = ad.X.toarray()
     subtract(ad, type_key="cell_type", droplet_key="ambidose_droplet")
     den = ad.layers["ambidose_denoised"].toarray()
     removed = ad.obs["ambidose_removed_umi"].to_numpy()
-    assert (den[:, 2] == 0.0).all()
+    assert (den <= raw + 1e-9).all()
+    assert den[:, 2].sum() < raw[:, 2].sum()
     assert (den[:n, 0] >= 79.0).all()
     assert (den[n:, 1] >= 79.0).all()
-    assert (removed > 15.5).all()
+    assert removed.max() > 16.0
 
 
 def test_ceiling_housekeeping_is_not_soup_cleared():
@@ -854,19 +1010,26 @@ def test_flat_native_gene_removal_does_not_track_noisy_dose():
 
 
 def test_mid_ceiling_gene_is_not_extra_cleared():
-    """r_t ≈ 0.6 is not true soup (ρ) and not the ρ=1 ceiling; rank-1 only."""
+    """r_t ≈ 0.6 is not true soup (ρ) and not the ρ=1 ceiling; rank-1 only.
+
+    Single type: with two types g2 was constructed identically-expressed
+    in both (r_t ≈ 0.6 in each), which after CEILING_CROSS_TYPE_GATE's
+    cross-type gate (0.3.13+) reads as no type having genuine specificity
+    for g2 over the other -- correctly loses the exception now, but that
+    conflates this test's actual target (the magnitude-only r_t≈0.6 rule)
+    with the separate cross-type mechanism. One type isolates the former.
+    """
     from anndata import AnnData
 
     from ambidose.pp import CHI_KEY, DOSE_KEY
 
     n = 20
     t0 = np.tile([80.0, 1.0, 12.0], (n, 1))
-    t1 = np.tile([1.0, 80.0, 12.0], (n, 1))
-    ad = AnnData(sparse.csr_matrix(np.vstack([t0, t1])))
+    ad = AnnData(sparse.csr_matrix(t0))
     ad.var_names = ["g0", "g1", "g2"]
-    ad.obs_names = [f"c{i}" for i in range(2 * n)]
+    ad.obs_names = [f"c{i}" for i in range(n)]
     ad.obs["ambidose_droplet"] = "cell"
-    ad.obs["cell_type"] = ["t0"] * n + ["t1"] * n
+    ad.obs["cell_type"] = ["t0"] * n
     n_bar = float(np.asarray(ad.X.sum(axis=1)).mean())
     chi2 = 12.0 / (0.6 * n_bar)
     rest = max(1.0 - chi2, 1e-6)
@@ -911,7 +1074,7 @@ def test_ambient_equality_has_zero_native_confidence():
     chi = np.array([0.0002, 0.0002])
     idx = np.arange(20)
     exclude = np.zeros(2, dtype=bool)
-    _, _, conf = _type_masks(
+    _, _, conf, _ = _type_masks(
         x, n, chi, idx, max_type_mean=0.05, min_chi=1e-6, top_n=100, exclude=exclude
     )
     assert (conf < 0.05).all()
@@ -1125,6 +1288,77 @@ def test_mark_doublets_skips_residual_on_auto_clusters():
     ad.obs[CLUSTER_KEY] = ["0"] * (n // 2) + ["1"] * (n // 2)
     mark_doublets(ad, type_key=CLUSTER_KEY)
     assert "ambidose_type_residual" not in ad.obs
+
+
+def test_pre_enrich_sat_mask_flags_full_capacity():
+    from ambidose._budget import _pre_enrich_sat_mask
+
+    take = np.array([10.0, 3.0, 0.0])
+    observed = np.array([10.0, 8.0, 5.0])
+    sat = _pre_enrich_sat_mask(take, observed)
+    np.testing.assert_array_equal(sat, [True, False, False])
+
+
+def test_unsat_cell_carry_puts_more_removal_on_high_dose_cell():
+    from ambidose._budget import _expand_take_to_cells
+
+    x = sparse.csr_matrix(np.array([[5.0, 5.0], [5.0, 5.0]]))
+    take = np.array([2.0, 2.0])
+    sat = np.array([False, False])
+    _expand_take_to_cells(
+        x,
+        np.array([0, 1]),
+        take,
+        np.array([3.0, 1.0]),
+        cell_keys=np.array(["c0", "c1"]),
+        sat_mask=sat,
+        gene_names=np.array(["g0", "g1"]),
+    )
+    removed = 5.0 - np.asarray(x.toarray())
+    assert removed[0].sum() > removed[1].sum()
+    assert removed.sum() == 4.0
+
+
+def test_dose_enrichment_scale_is_one_when_rate_tracks_rho():
+    from ambidose._budget import _dose_enrichment_scales
+
+    n = 12
+    library = np.full(n, 100.0)
+    rho = np.linspace(0.02, 0.2, n)
+    dose = rho * library
+    y = rho * library * 0.01
+    x = sparse.csr_matrix(y.reshape(-1, 1))
+    take = np.array([float(y.sum())])
+    scales = _dose_enrichment_scales(x, np.arange(n), take, dose, library)
+    assert scales[0] > 0.99
+
+
+def test_enrich_renormalize_keeps_type_take_sum():
+    from ambidose._budget import _apply_dose_enrichment
+
+    n = 12
+    library = np.full(n, 100.0)
+    dose = np.linspace(2.0, 20.0, n)
+    y = np.full(n, 5.0)
+    x = sparse.csr_matrix(y.reshape(-1, 1))
+    take = np.array([float(y.sum())])
+    scaled = _apply_dose_enrichment(
+        x, np.arange(n), take, dose, library, renormalize=True, observed=np.array([1e9])
+    )
+    assert scaled.sum() == pytest.approx(float(take.sum()))
+
+
+def test_dose_enrichment_blend_shrinks_take_when_counts_ignore_dose():
+    from ambidose._budget import ENRICH_STRENGTH, _apply_dose_enrichment
+
+    n = 12
+    library = np.full(n, 100.0)
+    dose = np.linspace(2.0, 20.0, n)
+    y = np.full(n, 5.0)
+    x = sparse.csr_matrix(y.reshape(-1, 1))
+    take = np.array([float(y.sum())])
+    scaled = _apply_dose_enrichment(x, np.arange(n), take, dose, library)
+    np.testing.assert_allclose(scaled, (1.0 - ENRICH_STRENGTH) * take, rtol=1e-6)
 
 
 def test_integer_type_allocation_preserves_group_budget():

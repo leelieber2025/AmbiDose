@@ -95,6 +95,9 @@ exclude_patterns = [
     ".DS_Store",
     "development_benchmarks.md",
     "resource_benchmark_4c24g.md",
+    "research",
+    "research/*",
+    "*_research_*.md",
 ]
 needs_sphinx = "5.0"
 nitpicky = False

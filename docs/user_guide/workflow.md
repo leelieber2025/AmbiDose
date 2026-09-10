@@ -69,7 +69,7 @@ The default estimator uses a broad `type_key`. `denoise()` resolves one in this 
 
 Do not pass a high-resolution atlas or a per-cell reassignment of cluster labels from ambient-contaminated marker scores. Fine fragments skip extra-clear below 10 cells and weaken exclusive gene ownership. Annotate cell types on the denoised counts after `denoise()`, or supply broad labels computed outside this package.
 
-Dose is estimated per Leiden fragment. Dominant-gene ownership is computed **per sample** from that sample's groups: fragments whose whole profiles are indistinguishable from split noise form a meta-group and share identity-gene ownership. Concatenating libraries does not share an owner catalog across samples. Each sample still uses its own $\chi_s$.
+Dose is estimated per Leiden fragment. Dominant-gene ownership is computed **per sample** from that sample's groups: fragments whose whole profiles are indistinguishable from split noise form a meta-group and share identity-gene ownership. A gene's ownership can further be shared across several distinct meta-groups of the same broad identity when each clears the ownership fold threshold over the next-lower tier (e.g. erythroid maturation stages at very different hemoglobin levels) — not only the single largest one. Concatenating libraries does not share an owner catalog across samples. Each sample still uses its own $\chi_s$.
 
 ## Dose estimation
 

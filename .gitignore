@@ -1,187 +1,33 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
 .pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-docs/api/generated/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# poetry
-poetry.lock
-
-# pdm
-.pdm.toml
-.pdm-python
-.pdm-build/
-
-# PEP 582
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# Ruff
 .ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
 
-# IDE / editors
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Project specific
-# Bundled large data is committed intentionally (gene features)
-# but do not add user-generated .parquet outputs here by mistake
 data/raw/
 data/processed/
-data/**/ckpt.tar.gz
-data/**/*.tar.gz
-data/**/posterior.h5
-data/**/*.h5
-data/**/*.h5ad
-data/**/*.loom
-data/**/*.zarr
-/ckpt.tar.gz
-/posterior.h5
-# Keep source data/ but ignore generated outputs at root
-gene_features.parquet
-*_gene_features.parquet
-*_features.parquet
-# Temporary analysis outputs at the repo root only -- do not blanket-ignore
-# .h5/.h5ad/.zip/.pdf/.png/.svg everywhere: that silently drops small test
-# fixtures (e.g. @pytest.mark.slow data) and eval-report figures anywhere
-# under the tree, with no warning that they never got tracked.
-/*.pdf
-/*.png
-/*.svg
-/*.zip
-active_results/
-# Local manuscripts, analysis dumps, and other non-package files
-bak/
+!data/README.md
+
+*.bak
+*.bak_*
+draft/*.bak*
+draft/**/*.bak*
+
+.ipynb_checkpoints/
+*.h5ad
+!tests/**/*.h5ad
+
+posterior.h5
+ckpt.tar.gz
+*.zip
+!docs/**/*.zip

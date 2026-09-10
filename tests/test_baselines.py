@@ -58,9 +58,9 @@ def test_cluster_cells_tiny_input_does_not_crash():
 def test_write_10x_mtx(tmp_path):
     adata = make_barnyard_toy(n_empty=5, n_human=5, n_mouse=5, seed=8)
     write_10x_mtx(adata, tmp_path / "mtx")
-    assert (tmp_path / "mtx" / "matrix.mtx").exists()
-    assert (tmp_path / "mtx" / "barcodes.tsv").exists()
-    assert (tmp_path / "mtx" / "genes.tsv").exists()
+    assert (tmp_path / "mtx" / "matrix.mtx.gz").exists()
+    assert (tmp_path / "mtx" / "barcodes.tsv.gz").exists()
+    assert (tmp_path / "mtx" / "features.tsv.gz").exists()
     assert sparse.issparse(adata.X)
     back = read_10x_mtx(tmp_path / "mtx")
     assert back.n_obs == adata.n_obs

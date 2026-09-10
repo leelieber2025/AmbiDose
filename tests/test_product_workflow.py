@@ -688,7 +688,7 @@ def test_typing_fast_is_noop_below_cell_threshold(monkeypatch):
         seen.append(bool(typing_fast))
         return orig(sub, typing_fast=typing_fast)
 
-    monkeypatch.setattr("ambidose.pp._embed_coarse_hvg", wrapped)
+    monkeypatch.setattr("ambidose._typing._embed_coarse_hvg", wrapped)
     adata = make_toy(n_samples=1, n_empty=40, n_cells=80, n_genes=50, seed=4)
     adata.obs[DROPLET_KEY] = adata.obs["droplet"].astype(str)
     resolve_type_key(adata)
@@ -730,7 +730,7 @@ def test_auto_typing_runs_independently_per_library(monkeypatch):
         sub.obs[CLUSTER_KEY] = labels
         return CLUSTER_KEY
 
-    monkeypatch.setattr("ambidose.pp._annotate_coarse_types_single", fake_single)
+    monkeypatch.setattr("ambidose._typing._annotate_coarse_types_single", fake_single)
     assert resolve_type_key(adata, sample_key="sample") == CLUSTER_KEY
     assert len(calls) == 2
     cells = adata.obs[DROPLET_KEY].astype(str) == "cell"

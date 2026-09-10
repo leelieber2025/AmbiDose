@@ -101,7 +101,7 @@ Tables can be pulled with `py_to_r(adata$obs)` and `py_to_r(adata$var)`. Prefer 
 
 ## 2. Command line
 
-Point `--input` at a Cell Ranger `outs/` directory. `--cells-only` and `--output-format 10x-mtx` write denoised integer counts as an MTX folder.
+Point `--input` at a Cell Ranger `outs/` directory. `--cells-only` and `--output-format 10x-mtx` write Cell Ranger v3 MTX (`features.tsv.gz`). Seurat `Read10X` reads that layout. Pass `--mtx-version 2` for uncompressed `genes.tsv`.
 
 ```bash
 ambidose denoise \

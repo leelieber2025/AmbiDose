@@ -415,6 +415,7 @@ def test_adaptive_dose_writes_selected_to_standard_keys():
     adata.obs["cell_type"] = ["A", "A", "B", "B"]
     adata.obs["ambidose_droplet"] = "cell"
     adata.var[CHI_KEY] = [0.5, 0.5]
+    adata.uns["ambidose"] = {"empty_umi": {"global": {"lam_e": 14.0, "n_empty": 40, "sample": ""}}}
     selected = estimate_dose_adaptive(adata, type_key="cell_type")
     np.testing.assert_allclose(adata.obs[DOSE_KEY], selected)
     np.testing.assert_allclose(adata.obs[RHO_KEY], selected / values.sum(axis=1))
@@ -438,7 +439,7 @@ def test_mixture_dose_separates_zero_and_cross_type_ambient():
     np.testing.assert_allclose(contaminated, 0.1, atol=0.01)
 
 
-def test_mixture_uses_empty_profile_when_leave_one_type_is_another_cell_type():
+def test_mixture_deconv_avoids_circular_leave_one_type_reference():
     from anndata import AnnData
     from scipy import sparse
 
@@ -458,7 +459,7 @@ def test_mixture_uses_empty_profile_when_leave_one_type_is_another_cell_type():
     adata.obs["ambidose_droplet"] = "cell"
     adata.var[CHI_KEY] = [0.5, 0.5, 0.0]
     estimate_dose_mixture(adata, type_key="cell_type")
-    assert set(adata.obs["ambidose_mixture_profile"]) == {"empty"}
+    assert set(adata.obs["ambidose_mixture_profile"]) == {"chi_deconv"}
     selected = adata.obs["ambidose_rho_mixture"].to_numpy()
     np.testing.assert_allclose(selected, adata.obs["ambidose_rho_mixture_empty"].to_numpy())
 
@@ -631,7 +632,7 @@ def test_mixture_one_type_without_chi_raises():
         estimate_dose_mixture(adata, type_key="cell_type")
 
 
-def test_mixture_keeps_leave_one_type_when_ambient_is_a_type_blend():
+def test_mixture_deconv_recovers_type_blend_ambient():
     from anndata import AnnData
     from scipy import sparse
 
@@ -653,7 +654,7 @@ def test_mixture_keeps_leave_one_type_when_ambient_is_a_type_blend():
     adata.obs["ambidose_droplet"] = "cell"
     adata.var[CHI_KEY] = [1 / 3, 1 / 3, 1 / 3]
     estimate_dose_mixture(adata, type_key="cell_type")
-    assert set(adata.obs["ambidose_mixture_profile"]) == {"cell"}
+    assert set(adata.obs["ambidose_mixture_profile"]) == {"chi_deconv"}
     np.testing.assert_allclose(
         adata.obs["ambidose_rho_mixture"].to_numpy(),
         adata.obs["ambidose_rho_mixture_cell"].to_numpy(),
@@ -837,6 +838,9 @@ def test_adaptive_dose_never_selects_unconverged_mixture(monkeypatch):
 
     adata = AnnData(np.array([[100], [100]], dtype=int))
     adata.obs["cell_type"] = ["A", "B"]
+    adata.uns["ambidose"] = {
+        "empty_umi": {"global": {"lam_e": 14.0, "n_empty": 80, "sample": ""}},
+    }
 
     def fixed(target, **kwargs):
         target.obs[DOSE_KEY] = [10.0, 10.0]
@@ -848,10 +852,10 @@ def test_adaptive_dose_never_selects_unconverged_mixture(monkeypatch):
             "droplet_key": kwargs["droplet_key"],
             "cell_label": kwargs["cell_label"],
         }
-        target.uns["ambidose"] = {
-            "dose": {"method": "typed"},
-            "dose_provenance": provenance,
-        }
+        uns = dict(target.uns.get("ambidose", {}))
+        uns["dose"] = {"method": "typed"}
+        uns["dose_provenance"] = provenance
+        target.uns["ambidose"] = uns
         return np.array([10.0, 10.0])
 
     def mixture(target, **kwargs):
@@ -872,7 +876,9 @@ def test_adaptive_dose_never_selects_unconverged_mixture(monkeypatch):
     monkeypatch.setattr(dose_module, "estimate_dose_mixture", mixture)
     selected = dose_module.estimate_dose_adaptive(adata, type_key="cell_type", droplet_key=None)
 
-    np.testing.assert_array_equal(selected, [10.0, 10.0])
+    scale = adata.uns["ambidose"]["dose"]["samples"]["global"]["q_scale"]
+    np.testing.assert_allclose(selected, [10.0 * scale] * 2)
+    np.testing.assert_array_equal(adata.obs["ambidose_dose_selected"].to_numpy(), [10.0, 10.0])
     assert adata.uns["ambidose"]["dose"]["selection"]["n_disagreement_unconverged_kept_fixed"] == 2
 
 
@@ -898,3 +904,46 @@ def test_diagnose_rejects_mismatched_estimator_provenance():
     }
     with pytest.raises(ValueError, match="different inputs"):
         diagnose_dose_disagreement(adata)
+
+
+def test_q_abs_scale_piecewise():
+    from ambidose._dose import Q_SCALE_EXPAND_CAP, Q_SCALE_SHRINK_FLOOR, q_abs_scale
+
+    high = dict(hat_rho=0.5)
+    assert q_abs_scale(17.575798880753, **high) == pytest.approx(0.50, abs=0.02)
+    assert q_abs_scale(55.7, **high) == pytest.approx(0.675, abs=0.03)
+    assert q_abs_scale(251.8, **high) <= 1.0
+    assert q_abs_scale(362.5, **high) >= 1.0
+    assert q_abs_scale(362.5, **high) <= Q_SCALE_EXPAND_CAP
+    assert q_abs_scale(2456.6, **high) == Q_SCALE_EXPAND_CAP
+    assert q_abs_scale(5.7, **high) == Q_SCALE_SHRINK_FLOOR
+    curve = q_abs_scale(24.84, hat_rho=0.81)
+    blend = q_abs_scale(24.84, hat_rho=0.017)
+    assert curve < 1.0
+    assert curve < blend < 1.0
+    assert q_abs_scale(24.84, hat_rho=0.0) == 1.0
+    assert q_abs_scale(24.84, hat_rho=0.10) == pytest.approx(curve)
+
+
+def test_adaptive_q_scale_uses_empty_mean():
+    from anndata import AnnData
+    from scipy import sparse
+
+    from ambidose._dose import q_abs_scale
+    from ambidose.pp import RHO_KEY, estimate_dose_adaptive
+
+    values = np.array([[90, 10], [90, 10], [10, 90], [10, 90], [5, 5], [5, 5]])
+    adata = AnnData(sparse.csr_matrix(values))
+    adata.obs["cell_type"] = ["A", "A", "B", "B", "empty", "empty"]
+    adata.obs["ambidose_droplet"] = ["cell", "cell", "cell", "cell", "empty", "empty"]
+    adata.var[CHI_KEY] = [0.5, 0.5]
+    estimate_dose_adaptive(adata, type_key="cell_type")
+    cells = adata.obs["ambidose_droplet"].to_numpy() == "cell"
+    n = np.asarray(adata.X.sum(axis=1)).ravel()
+    selected = adata.obs["ambidose_dose_selected"].to_numpy()
+    hat = float(np.median((selected / n)[cells]))
+    lam = float(n[~cells].mean())
+    n_bar = float(n[cells].mean())
+    scale = q_abs_scale(hat * n_bar / lam, hat_rho=hat)
+    np.testing.assert_allclose(adata.obs.loc[cells, RHO_KEY], (selected / n)[cells] * scale)
+    assert adata.uns["ambidose"]["dose"]["samples"]["global"]["q_scale"] == pytest.approx(scale)

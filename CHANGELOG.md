@@ -2,7 +2,77 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.5.1] - 2026-09-10
+
+
+### Changed
+
+- Product dose path is `estimate_dose_adaptive`. Executed ρ uses a
+  sample-level unlabeled scale `s(q)`, `q = median(ρ̂) n̄ / λ_e` from
+  empty-droplet mean UMI (replaces a global 0.704). The map shrinks at
+  low q (floor 0.50) and expands at high q (cap 1.25). Shrink is blended
+  out as median selected ρ̂ approaches 0 so clean libraries are not
+  treated like fat-empty high-contamination runs. `estimate_chi` stores
+  `λ_e` in `uns["ambidose"]["empty_umi"]`; missing empties raise.
+- Default subtraction is dual-channel: rank-1 along χ under type
+  budgets, plus soupOnly extra-clear of unexpressed unowned genes that
+  may exceed `d_c`. Unsaturated rank-1 is spent inside cells; saturated
+  gene columns stay type-level; protected genes are allocated by library
+  size. High-χ U extra-clear uses an 80% χ-mass prefix. Pearson
+  reweighting reallocates unowned rank-1 without shrinking the type
+  budget.
+- Ownership: gap-cascade with noise-aware folds; ambient-ceiling
+  exceptions require cross-type specificity; high-χ U is revoked when a
+  minority of cells in the type exceeds the type ceiling.
+- `ambidose_rho_trust` is a run-state label, not a calibrated
+  probability that a cell was correctly corrected. Count monotonicity
+  (`0 ≤ corrected ≤ raw`) does not bound native-molecule loss.
+
+## [0.3.3] - 2026-09-07
+
+### Changed
+
+- Ambient dose estimation for samples with more than one cell type now
+  estimates each type's own contribution to the empty-droplet profile
+  directly, instead of comparing it against a pooled profile of every
+  other type. This removes spurious cross-type differences in estimated
+  contamination, improves native signal retention, and improves
+  specificity/precision on barnyard validation data with no loss of
+  sensitivity.
+- Gene-ownership decisions between cell types now account for sampling
+  noise: a fold-change gap that only clears the ownership threshold by
+  less than its own measurement uncertainty is no longer treated as a
+  confident decision.
+- High-χ genes (the smallest set of ambient genes covering 15% of the
+  empty-droplet profile) use single-owner assignment; other genes keep
+  shared ownership across related clusters. Prevents highly ambient genes
+  such as hemoglobin from being co-owned by every fragment of a merged
+  cluster.
+
+### Fixed
+
+- `denoise()`'s documentation still described the previous ambient
+  dose-estimation method; updated to match the change above.
+
+## [0.3.2] - 2026-09-04
+
+### Changed
+
+- Dominant-gene ownership now allows a marker gene to be shared by several
+  related sub-population clusters ("gap cascade") instead of being awarded
+  to a single global-argmax winner, better matching biology where markers
+  are routinely shared across related sub-populations rather than owned
+  exclusively by one.
+- Leftover pooled-dose reallocation is now capped against what the
+  previous single-winner ownership rule would have redistributed for the
+  same type/gene, and down-weights genes whose observed level already
+  exceeds the ambient ceiling. Both are defensive safeguards against
+  over-correction on small or fragmented clusters; no change to must-win
+  barnyard benchmarks.
+- `write_10x_mtx()` and CLI `--output-format 10x-mtx` default to Cell Ranger
+  v3 (`features.tsv.gz`). Pass `version=2` or `--mtx-version 2` for v2
+  (`genes.tsv`). Input discovery prefers v3+ `raw_feature_bc_matrix` (and
+  `.gz` barcodes) when both layouts are present.
 
 ## [0.3.1] - 2026-09-03
 
