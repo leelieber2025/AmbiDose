@@ -1,0 +1,134 @@
+Metadata-Version: 2.4
+Name: ambidose
+Version: 0.5.1
+Summary: Per-cell ambient dose removal for droplet scRNA-seq, using empty droplets to pin soup composition
+Author-email: "Zhao Li (李钊)" <leelieber@gmail.com>
+License-Expression: Apache-2.0
+Project-URL: Homepage, https://github.com/leelieber2025/AmbiDose
+Project-URL: Documentation, https://ambidose.readthedocs.io
+Project-URL: Changelog, https://ambidose.readthedocs.io/en/latest/changelog.html
+Project-URL: Source, https://github.com/leelieber2025/AmbiDose
+Project-URL: Issues, https://github.com/leelieber2025/AmbiDose/issues
+Keywords: single-cell,RNA-seq,ambient RNA,empty droplets,background removal,bioinformatics
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: anndata<0.14,>=0.8
+Requires-Dist: numpy>=1.23
+Requires-Dist: pandas>=1.3
+Requires-Dist: scipy>=1.7
+Requires-Dist: h5py>=3.0
+Requires-Dist: scanpy>=1.10
+Requires-Dist: scikit-learn>=1.0
+Requires-Dist: scikit-image>=0.19
+Requires-Dist: threadpoolctl>=3.0
+Requires-Dist: igraph>=0.10
+Requires-Dist: scfair>=0.7
+Provides-Extra: baselines
+Requires-Dist: scvi-tools>=1.0; extra == "baselines"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0; extra == "dev"
+Requires-Dist: ruff<0.17,>=0.4.0; extra == "dev"
+Provides-Extra: docs
+Requires-Dist: sphinx>=7.0; extra == "docs"
+Requires-Dist: sphinx-book-theme>=1.1; extra == "docs"
+Requires-Dist: myst-nb>=1.0; extra == "docs"
+Requires-Dist: sphinx-copybutton>=0.5; extra == "docs"
+Requires-Dist: sphinx-design>=0.5; extra == "docs"
+Dynamic: license-file
+
+# AmbiDose
+
+[![PyPI version](https://img.shields.io/pypi/v/ambidose.svg)](https://pypi.org/project/ambidose/)
+[![PyPI downloads](https://img.shields.io/pepy/dt/ambidose.svg)](https://pepy.tech/project/ambidose)
+[![Bioconda](https://img.shields.io/conda/vn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
+[![Conda downloads](https://img.shields.io/conda/dn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
+[![Python versions](https://img.shields.io/pypi/pyversions/ambidose.svg)](https://pypi.org/project/ambidose/)
+[![Documentation](https://readthedocs.org/projects/ambidose/badge/?version=latest)](https://ambidose.readthedocs.io/en/latest/)
+[![CI](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml/badge.svg)](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22278199.svg)](https://doi.org/10.5281/zenodo.22278199)
+
+**AmbiDose** removes ambient RNA from droplet scRNA-seq. Empty droplets
+estimate the soup profile χ. Each cell receives an operational dose
+`d_c = ρ_c · n_c`. Type-aware subtraction writes non-negative integer
+counts. The method does not correct batch effects or assign cell types.
+
+Docs: [Read the Docs](https://ambidose.readthedocs.io/en/latest/).
+
+## Install
+
+```bash
+pip install ambidose
+# or: conda install -c conda-forge -c bioconda ambidose
+```
+
+Python 3.10–3.13. A GPU is not required. Details:
+[installation](https://ambidose.readthedocs.io/en/latest/installation.html).
+
+## First run
+
+```python
+import scanpy as sc
+import ambidose as amdose
+
+adata = sc.read_10x_mtx("filtered_feature_bc_matrix/")
+adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
+# adata.X is denoised integer UMI; original counts in layers["raw_counts"]
+```
+
+```bash
+ambidose denoise --input /path/to/outs --output cleaned.h5ad
+```
+
+Treat `rho` as an operational dose. Check `obs["ambidose_rho_trust"]` and
+the QC report before using it as a contamination rate.
+
+## Status
+
+**0.5.1 (Alpha).** Import as `import ambidose as amdose`. The entry point is
+`denoise()`. See the
+[API reference](https://ambidose.readthedocs.io/en/latest/api/index.html).
+
+## Next steps
+
+1. [Installation](https://ambidose.readthedocs.io/en/latest/installation.html)
+2. [Quickstart](https://ambidose.readthedocs.io/en/latest/quickstart.html)
+3. [Tutorials](https://ambidose.readthedocs.io/en/latest/tutorials/index.html)
+4. [FAQ](https://ambidose.readthedocs.io/en/latest/faq.html)
+5. [From R](https://ambidose.readthedocs.io/en/latest/tutorials/from_r.html)
+
+## Citation
+
+Pin the package version used in the analysis, for example `ambidose==0.5.1`.
+Software record: [10.5281/zenodo.22278199](https://doi.org/10.5281/zenodo.22278199).
+See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/latest/citation.html).
+
+```bibtex
+@software{li2026ambidose,
+  title   = {AmbiDose: per-cell ambient dose removal for droplet scRNA-seq},
+  author  = {Li, Zhao},
+  year    = {2026},
+  version = {0.5.1},
+  doi     = {10.5281/zenodo.22278199},
+  url     = {https://doi.org/10.5281/zenodo.22278199},
+}
+```
+
+## License
+
+Software: [Apache License 2.0](LICENSE).
+
+## Author
+
+**Zhao Li (李钊)**
+Email: [leelieber@gmail.com](mailto:leelieber@gmail.com)
