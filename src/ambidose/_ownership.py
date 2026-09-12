@@ -60,6 +60,78 @@ def _restrict_high_chi_to_single_winner(
     return {name: np.where(high, masks_sw[name], masks[name]) for name in masks}
 
 
+def _strip_ambient_level_owners(
+    masks: dict[str, np.ndarray],
+    type_means: dict[str, np.ndarray],
+    n_bar_by_type: dict[str, float],
+    chi: np.ndarray,
+    *,
+    rt_win: float = 1.0,
+) -> dict[str, np.ndarray]:
+    """Drop ownership when this type's r_t ≤ 1, but only if a real winner exists.
+
+    r_t = mean/(n̄ χ). A type with r_t ≤ 1 is still ambient-ceiling on that
+    gene. If some other type in the sample has r_t > 1, that type is the
+    expressor and ambient-level types must not inherit protection (kidney
+    Hb in non-erythroid). If no type clears r_t > 1, leave ownership
+    unchanged (species fragments on barnyards).
+    """
+    names = [t for t in masks if t in type_means]
+    if len(names) == 0:
+        return masks
+    chi = np.asarray(chi, dtype=np.float64)
+    rts = []
+    for t in names:
+        mean = np.asarray(type_means[t], dtype=np.float64)
+        nbar = float(n_bar_by_type.get(t, 0.0))
+        expected = nbar * chi
+        rt = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
+        rts.append(rt)
+    rt_mat = np.vstack(rts)
+    has_winner = np.any(rt_mat > float(rt_win), axis=0)
+    out = dict(masks)
+    for i, t in enumerate(names):
+        keep = (~has_winner) | (rt_mat[i] > float(rt_win))
+        out[t] = np.asarray(masks[t], dtype=bool) & keep
+    return out
+
+
+def _revoke_u_if_rt_winner(
+    is_u: np.ndarray,
+    type_name: str,
+    type_means: dict[str, np.ndarray],
+    n_bar_by_type: dict[str, float],
+    chi: np.ndarray,
+    *,
+    fold: float = OWNER_MIN_FOLD,
+) -> np.ndarray:
+    """Do not soupOnly a gene this type uniquely leads on r_t.
+
+    High-χ identity can sit below SOUP_ONLY_MAX_RT=0.4 (mean < 0.4 n̄χ)
+    and still be extra-cleared in its owner type. If this type is the
+    exclusive r_t argmax, it is the expressor and must not extra-clear.
+    Needs ≥2 types; a lone type is left unchanged. r_t>1 is not required:
+    that case is already excluded from U by the 0.4 cap.
+    """
+    names = [t for t in type_means if t in n_bar_by_type]
+    if len(names) < 2 or type_name not in names:
+        return is_u
+    chi = np.asarray(chi, dtype=np.float64)
+    rts = []
+    for t in names:
+        mean = np.asarray(type_means[t], dtype=np.float64)
+        nbar = float(n_bar_by_type[t])
+        expected = nbar * chi
+        rt = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
+        rts.append(rt)
+    rt_mat = np.vstack(rts)
+    i = names.index(type_name)
+    ranked = np.sort(rt_mat, axis=0)[::-1]
+    exclusive = ranked[0] >= float(fold) * np.maximum(ranked[1], 1e-9)
+    winner = rt_mat.argmax(axis=0)
+    return np.asarray(is_u, dtype=bool) & ~((winner == i) & exclusive)
+
+
 def _mt_gene_mask(var_names) -> np.ndarray:
     """Identify mitochondrial symbols while excluding MTOR/MT1A-like names.
 
@@ -239,6 +311,83 @@ def _confident_owner_mask(
         t: (mean_t >= top1) & (top1 > max_type_mean) & (top1 >= gap * np.maximum(top2, 1e-9))
         for t, mean_t in type_means.items()
     }
+
+
+def _ceiling_cross_type_gate(
+    n: np.ndarray,
+    chi: np.ndarray,
+    type_means: dict[str, np.ndarray],
+    type_indices: dict[str, np.ndarray],
+    *,
+    gap: float = OWNER_MIN_FOLD,
+    r_t_floor: float = 0.5,
+) -> dict[str, np.ndarray]:
+    """Per-type gate for ``_type_masks``'s ``ceiling_gate`` (research
+    candidate, off by default -- see ``ambidose.pp.CEILING_CROSS_TYPE_GATE``
+    and ``_type_masks``'s ``ceiling_gate`` docstring for the mechanism).
+
+    Third design, after two rejected shapes (see DEVLOG.md 2026-09-09 for
+    the full history). The first (``_confident_owner_mask`` reused as-is,
+    single global-argmax winner against the best *other* type) passed a
+    pancreas spot-check but was evaluated on the full manuscript suite and
+    rejected: real, first-order regressions on GSE218853 (5/5 libraries,
+    ARS macro +2.6pp/ERS -2.1pp) and fetal erythroid Hb retention (-5.3pp
+    for a -1.0pp wrong-cell-Hb gain, a >5:1 unfavorable trade), plus a
+    root-caused failure on the realistic_gt PBMC benchmark: when two
+    genuinely related types both carry real signal for the same gene
+    (e.g. a Leiden pass splits T cells into a near-pure T-cell type and a
+    second type where NK and T cells share one coarse label), CD3D/CD3E/
+    CD8A/TRAC-class core identity genes are 6-7x above the true background
+    in *both* types but within ~1.2x of each other -- a single-winner test
+    can award the exception to at most one of them, so a real marker in
+    two legitimately related types loses protection in one or both purely
+    because they are close competitors, not because either is spurious.
+
+    This version instead compares each type's r_t against the *median*
+    r_t of the other usable types (a robust background estimate), not the
+    single best competitor: ``r_t[t] >= gap * median(r_t[other types])
+    and r_t[t] > r_t_floor``. Two related types that both sit far above
+    the true background (the common case above) can both clear this test
+    simultaneously, since neither has to out-compete the other directly --
+    the median of the *other* five-plus types stays low even when one of
+    them is itself elevated. Verified directly before promoting this
+    version to the only implementation: on the realistic_gt PBMC case,
+    every core T-cell marker (CD3D/E/G, CD2, CD8A/B, IL7R, TRAC) and every
+    NK marker (NKG7, GNLY, KLRD1, KLRB1) now keeps protection in both the
+    T-cell-dominant and the NK+T-cell-merged coarse type; on the pancreas
+    case, the true acinar type's 14 core markers and a small real myeloid
+    type's 6 markers (S100a8/a9, Mrc1, Mpeg1, Clec4e, C5ar1) all still
+    keep protection, same as the rejected version. Structurally more
+    permissive than the single-winner version (keeps roughly 2x as many
+    (type,gene) pairs on both spot-check datasets) -- not yet evaluated on
+    the full manuscript suite; that is the next step before any promotion
+    decision, not a substitute for it.
+
+    ``gap`` defaults to the general-purpose ownership fold
+    ``OWNER_MIN_FOLD`` (1.2), not the stricter ``CROSS_TYPE_ANCHOR_GAP``
+    (3.0) calibrated for a different, deliberately conservative anchor-pool
+    purpose elsewhere in this module.
+
+    Fewer than two usable types means there is nothing to compare
+    against -- returns all-True (pass-through, preserving the pre-gate
+    unconditional exception).
+    """
+    usable = {t: m for t, m in type_means.items() if type_indices[t].size >= MIN_TYPE_CELLS}
+    pass_through = {t: np.ones(chi.size, dtype=bool) for t in type_means}
+    if len(usable) < 2:
+        return pass_through
+    r_t = {}
+    for t, mean_t in usable.items():
+        n_bar_t = float(n[type_indices[t]].mean())
+        expected_t = n_bar_t * chi
+        r_t[t] = np.divide(mean_t, expected_t, out=np.zeros_like(mean_t), where=expected_t > 0)
+    names = list(usable)
+    stacked = np.vstack([r_t[t] for t in names])
+    result = dict(pass_through)
+    for i, t in enumerate(names):
+        background = np.median(np.delete(stacked, i, axis=0), axis=0)
+        result[t] = (r_t[t] >= gap * np.maximum(background, 1e-9)) & (r_t[t] > r_t_floor)
+    return result
 
 
 def _cross_type_anchor_mask(
@@ -805,6 +954,7 @@ def _type_masks(
     exclude: np.ndarray | None = None,
     empirical_margin: bool = False,
     collision_exception: bool = True,
+    ceiling_gate: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Unexpressed genes, diagnostic native mask, native confidence, and r_t.
 
@@ -845,6 +995,33 @@ def _type_masks(
     fetal-liver sample, not just Erythroid) and broke a synthetic test's
     genuinely-uniform ambient gene (`den[:,2]` dropped from an expected 0
     to 38-39 of 40, essentially unremoved).
+
+    ``ceiling_gate`` (research candidate, off by default -- see
+    ``ambidose.pp.CEILING_CROSS_TYPE_GATE``): the collision/ceiling
+    exception below grants unconditional protection to any gene whose
+    *own* type mean approaches the ρ=1 ambient ceiling, without checking
+    whether any other type shows the same pattern -- a type whose cells
+    genuinely have unusually high per-cell ρ can trip this on pure soup,
+    no real expression required (over-protection, the mirror image of the
+    under-protection ``_revoke_u_with_expressing_subset`` fixes in
+    0.3.12). ``ceiling_gate``, when given, ANDs an extra per-gene
+    boolean requiring this type's r_t to beat every other usable type's
+    r_t by ``OWNER_MIN_FOLD`` (built by the caller via
+    ``_confident_owner_mask`` on r_t instead of raw means -- reused as-is,
+    not reimplemented). This is a different mechanism from the dose-
+    baseline swap two paragraphs up: that one replaced ``expected`` itself
+    and failed because a genuinely uniform ambient gene passed a raw
+    "significant in >=2 types" count test as easily as a real marker did.
+    This one leaves ``expected`` untouched and instead gates the existing
+    exception with a magnitude *gap* test (top r_t vs runner-up r_t),
+    which correctly keeps protection for a real marker that also has some
+    signal in one small related type (gap-cascade's ``OWNER_MIN_FOLD``,
+    not the stricter ``CROSS_TYPE_ANCHOR_GAP=3`` calibrated for a
+    different, deliberately conservative purpose elsewhere in this
+    module -- verified directly on the GSE125588 pancreas case before
+    this was wired in: a flat 3x gate and a naive per-type gap-cascade
+    both wrongly stripped real acinar/myeloid markers; top1-vs-top2 on
+    r_t at ``OWNER_MIN_FOLD=1.2`` did not).
     """
     mean = np.asarray(x[idx].mean(axis=0)).ravel()
     expected = float(n[idx].mean()) * chi
@@ -884,6 +1061,10 @@ def _type_masks(
     if n_bar > 0 and collision_exception:
         abundant_collision = (mean > U_MAX_LIBRARY_FRAC * n_bar) & (r_t > 0.5)
         ceiling = r_t > 0.85
+        if ceiling_gate is not None:
+            gate = np.asarray(ceiling_gate, dtype=bool)
+            abundant_collision = abundant_collision & gate
+            ceiling = ceiling & gate
         unexp = unexp & ~abundant_collision & ~ceiling
         native_confidence[abundant_collision] = 1.0
     is_p = ~unexp

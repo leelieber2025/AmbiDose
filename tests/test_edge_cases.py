@@ -340,4 +340,9 @@ def test_other_label_has_no_special_protection():
     subtract(ad, type_key="cell_type")
     den = np.asarray(ad.layers[LAYER_OUT].todense())
 
-    assert float(den[:n, 1].mean()) == float(den[2 * n :, 0].mean())
+    # Other is a real type, not empty: keep its native gene, still extra-clear
+    # unowned genes. χ-stratified soupOnly can differ across genes; the label
+    # itself is not a protection rule.
+    assert float(den[:n, 0].mean()) >= 79.0
+    assert float(den[2 * n :, 2].mean()) >= 79.0
+    assert float(den[2 * n :, 0].mean()) < 5.0

@@ -106,6 +106,61 @@ SOUP_ONLY_MAX_RT = 0.4
 # Σd_c/Σn_c is the dose-weighted type ρ. Almost-uncontaminated types must
 # not wipe U genes the same way heavily contaminated types do.
 SOUP_ONLY_RHO_FLOOR = 0.01
+# Sample-level executed scale s(q), q = median(ρ̂) n̄ / λ_e.
+# Piecewise log-linear on natural-depth PBMC inject + realistic_gt;
+# Cargnelli held out. Expand cap 1.25, shrink floor 0.50.
+# docs/research/piecewise_caps_research_20260909.md
+Q_SCALE_T = 316.59502562631263
+Q_SCALE_A_LO = -1.4412479601313954
+Q_SCALE_B_LO = 0.26081257417233045
+Q_SCALE_A_HI = -1.5088953130300833
+Q_SCALE_B_HI = 0.27637025546757915
+Q_SCALE_EXPAND_CAP = 1.25
+Q_SCALE_SHRINK_FLOOR = 0.50
+# Blend shrink toward identity as median selected ρ̂ → 0.
+# w = clip(ρ̂ / LOW_RHO, 0, 1); executed = (1-w)*1 + w*s(q) when s(q)<1.
+# Hard cut at 0.10 jumped GSE (ρ̂=0.091) to s=1. Curve a,b,T unchanged.
+Q_SCALE_LOW_RHO = 0.10
+
+
+def _q_curve_scale(q: float) -> float:
+    """Piecewise s(q) without the low-ρ̂ blend."""
+    if not np.isfinite(q):
+        raise ValueError(f"q must be finite, got {q!r}")
+    if q <= 0:
+        return 1.0
+    if q < Q_SCALE_T:
+        s = float(np.exp(Q_SCALE_A_LO + Q_SCALE_B_LO * np.log(q)))
+        s = min(s, 1.0)
+        s = max(s, Q_SCALE_SHRINK_FLOOR)
+    else:
+        s = float(np.exp(Q_SCALE_A_HI + Q_SCALE_B_HI * np.log(q)))
+        s = max(s, 1.0)
+        s = min(s, Q_SCALE_EXPAND_CAP)
+    return float(np.clip(s, Q_SCALE_SHRINK_FLOOR, Q_SCALE_EXPAND_CAP))
+
+
+def q_abs_scale(q: float, *, hat_rho: float) -> float:
+    """Map unlabeled q = median(ρ̂) n̄ / λ_e to a sample executed scale.
+
+    ``q<=0`` is a legitimate zero-ambient sample (median ρ̂ is exactly 0
+    across the group), not an error: no ambient signal means there is
+    nothing to expand or shrink, so the scale is the identity, 1.0 -- the
+    executed dose stays 0 either way (``executed_rho = selected_rho *
+    scale`` with ``selected_rho`` already 0). Only non-finite ``q`` (NaN/
+    inf, an upstream data problem) still raises.
+
+    Shrink is blended out as ``hat_rho → 0``: ``w = clip(hat_rho /
+    Q_SCALE_LOW_RHO, 0, 1)``, executed ``(1-w) + w s(q)``. Expand
+    (``s(q) >= 1``) is unchanged. High ρ̂ (Cargnelli) keeps the curve.
+    """
+    if not np.isfinite(hat_rho):
+        raise ValueError(f"hat_rho must be finite, got {hat_rho!r}")
+    s = _q_curve_scale(q)
+    if s >= 1.0:
+        return s
+    w = float(np.clip(hat_rho / Q_SCALE_LOW_RHO, 0.0, 1.0))
+    return float((1.0 - w) + w * s)
 
 
 def _unexpressed_mask(
@@ -139,6 +194,34 @@ def _unexpressed_mask(
         margin = noise_k * np.sqrt(np.maximum(expected, 0.0) / n_cells_t)
     ceiling = np.maximum(max_type_mean, expected + margin)
     return mean <= ceiling
+
+
+def _soup_u_mask(
+    mean: np.ndarray,
+    chi: np.ndarray,
+    n_cells: int,
+    n_bar: float,
+    *,
+    max_type_mean: float,
+    min_chi: float,
+    native_everywhere: np.ndarray,
+    apply_rt_and_collision: bool,
+) -> np.ndarray:
+    """Unexpressed ∩ χ-supported genes. Same ceiling as dose U evidence.
+
+    ``apply_rt_and_collision`` adds subtract's mid-ceiling / abundance
+    guards so extra-clear does not wipe housekeeping. Dose MLE evidence
+    omits those guards (``False``).
+    """
+    expected = np.asarray(chi, dtype=np.float64) * float(n_bar)
+    u = _unexpressed_mask(mean, expected, n_cells, max_type_mean=max_type_mean)
+    u = u & ~np.asarray(native_everywhere, dtype=bool) & (chi >= min_chi)
+    if apply_rt_and_collision and n_bar > 0:
+        r_t = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
+        u = u & (r_t < SOUP_ONLY_MAX_RT)
+        u = u & ~((mean > U_MAX_LIBRARY_FRAC * n_bar) & (r_t > 0.5))
+        u = u & ~(r_t > 0.85)
+    return u
 
 
 def _top_chi_indices(chi: np.ndarray, candidates: np.ndarray, top_n: int) -> np.ndarray:
@@ -441,14 +524,18 @@ def estimate_dose(
             if idx.size == 0:
                 continue
             mean = np.asarray(x[idx].mean(axis=0)).ravel()
-            expected = float(n[idx].mean()) * chi
-            # See _unexpressed_mask: Poisson-noise margin around the ρ=1
-            # ambient ceiling, not a bare mean <= expected comparison.
-            u_t = _unexpressed_mask(mean, expected, idx.size, max_type_mean=max_type_mean)
-            # Rank unexpressed genes by χ. Do not intersect with the global
-            # top-χ set first: those genes are the majority type's markers,
-            # so U_t ∩ soup is empty for the type that dominates the soup.
-            cand = np.flatnonzero(u_t & ~native_everywhere & (chi >= min_chi))
+            n_bar = float(n[idx].mean()) if idx.size else 0.0
+            u_t = _soup_u_mask(
+                mean,
+                chi,
+                idx.size,
+                n_bar,
+                max_type_mean=max_type_mean,
+                min_chi=min_chi,
+                native_everywhere=native_everywhere,
+                apply_rt_and_collision=False,
+            )
+            cand = np.flatnonzero(u_t)
             fb = cand.size < min_genes
             if fb:
                 soup = (
@@ -1085,7 +1172,13 @@ def estimate_dose_adaptive(
     min_chi: float = 1e-6,
     min_valid: int = MIN_VALID,
 ) -> np.ndarray:
-    """Select fixed dose on agreement and mixture dose on large disagreement."""
+    """Select fixed dose on agreement and mixture dose on large disagreement.
+
+    Executed ``ambidose_d`` / ``ambidose_rho`` are the selected values
+    multiplied by the sample-level scale ``s(q)``, ``q = median(ρ̂) n̄ / λ_e``.
+    Shrink is blended toward 1 as median selected ρ̂ approaches 0.
+    ``ambidose_dose_selected`` remains the unscaled estimator output.
+    """
     estimate_dose(
         adata,
         type_key=type_key,
@@ -1123,30 +1216,71 @@ def estimate_dose_adaptive(
     n = np.asarray(
         _as_csr(adata.layers[layer] if layer is not None else adata.X).sum(axis=1)
     ).ravel()
-    adata.obs[DOSE_KEY] = selected
     selected_rho = np.divide(selected, n, out=np.zeros_like(selected), where=n > 0)
-    adata.obs[RHO_KEY] = selected_rho
     is_cell = _resolve_cell_mask(adata, droplet_key, cell_label)
     samples = _sample_names(adata, sample_key)
     sample_of = np.array([None] * adata.n_obs, dtype=object) if samples is None else samples
     groups = [None] if samples is None else list(pd.unique(samples))
+    executed_rho = np.zeros_like(selected_rho)
     selected_samples = {}
+    drop = (
+        adata.obs[droplet_key].astype(str).to_numpy()
+        if droplet_key is not None and droplet_key in adata.obs
+        else None
+    )
+    stored_empty = dict(adata.uns.get("ambidose", {})).get("empty_umi", {})
     for sample in groups:
         mask = is_cell & (sample_of == sample)
         sample_id = _sample_storage_id(None if sample is None else str(sample))
+        lam_e = float("nan")
+        if drop is not None:
+            empty = drop == "empty"
+            if sample is not None:
+                empty = empty & (sample_of == sample)
+            if empty.any():
+                lam_e = float(n[empty].mean())
+        if not np.isfinite(lam_e) or lam_e <= 0:
+            rec = stored_empty.get(sample_id)
+            if rec is not None and rec.get("lam_e") is not None:
+                lam_e = float(rec["lam_e"])
+        if not np.isfinite(lam_e) or lam_e <= 0:
+            raise ValueError(
+                "empty-droplet mean UMI is required for q-scale; "
+                "run estimate_chi with empty droplets present or set "
+                "uns['ambidose']['empty_umi']"
+            )
+        hat = float(np.median(selected_rho[mask])) if mask.any() else 0.0
+        n_bar = float(n[mask].mean()) if mask.any() else 0.0
+        q = hat * n_bar / lam_e if n_bar > 0 else float("nan")
+        scale = q_abs_scale(q, hat_rho=hat)
+        executed_rho[mask] = np.clip(selected_rho[mask] * scale, 0.0, 1.0)
         selected_samples[sample_id] = {
             "sample": "" if sample is None else str(sample),
             "sample_is_global": sample is None,
             "n_cell": int(mask.sum()),
-            "d_median": float(np.median(selected[mask])) if mask.any() else 0.0,
-            "rho_median": float(np.median(selected_rho[mask])) if mask.any() else 0.0,
+            "d_median": float(np.median(executed_rho[mask] * n[mask])) if mask.any() else 0.0,
+            "rho_median": float(np.median(executed_rho[mask])) if mask.any() else 0.0,
+            "hat_rho": float(hat),
+            "q": float(q),
+            "q_scale": float(scale),
+            "lam_e": float(lam_e),
         }
+    executed = executed_rho * n
+    adata.obs[DOSE_KEY] = executed
+    adata.obs[RHO_KEY] = executed_rho
     uns = dict(adata.uns.get("ambidose", {}))
     uns["dose"] = {
         "fixed": fixed_dose_meta,
         "selected": {"samples": selected_samples},
         "selection": selection_summary,
         "samples": selected_samples,
+        "q_scale": {
+            "T": Q_SCALE_T,
+            "expand_cap": Q_SCALE_EXPAND_CAP,
+            "shrink_floor": Q_SCALE_SHRINK_FLOOR,
+            "low_rho": Q_SCALE_LOW_RHO,
+            "low_rho_blend": True,
+        },
     }
     adata.uns["ambidose"] = uns
-    return selected
+    return executed

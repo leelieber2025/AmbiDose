@@ -25,9 +25,9 @@ raw droplets + filtered cell barcodes
    coarse types → per-cell ρ and d
                  │
                  ▼
-     subtract rank-1 d_c χ_s
-     (soupOnly extra-clear
-      may exceed d_c)
+     subtract (type-constrained):
+     rank-1 along χ + soupOnly
+     (soupOnly may exceed d_c)
 ```
 
 Empty droplets determine the ambient composition $\chi_s$ for each sample. Each cell receives an operational scale $\rho_c$ and $\chi$-direction dose $d_c=\rho_c n_c$ (the rank-1 budget along $\chi_s$, not a cap on total UMI removal). The standard workflow (`denoise()`) writes non-negative integer counts to `adata.layers["ambidose_denoised"]` and, as its last step, also sets them as `adata.X` -- the original input moves to `adata.layers["raw_counts"]`.

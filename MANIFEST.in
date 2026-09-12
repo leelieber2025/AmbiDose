@@ -10,10 +10,25 @@ include .gitignore
 include .readthedocs.yaml
 
 graft tests
-graft docs
-prune docs/_build
-exclude docs/development_benchmarks.md
-exclude docs/resource_benchmark_4c24g.md
+prune docs
+
+# Public documentation allowlist. Internal research, audits, development notes,
+# and dated diagnostics must never enter a release artifact.
+include docs/conf.py
+include docs/requirements.txt
+include docs/index.md
+include docs/installation.md
+include docs/quickstart.md
+include docs/faq.md
+include docs/algorithm.md
+include docs/citation.md
+include docs/changelog.md
+include docs/license.md
+include docs/references.md
+recursive-include docs/_static *
+recursive-include docs/api *.md
+recursive-include docs/user_guide *.md
+recursive-include docs/tutorials *.md *.ipynb
 
 prune scripts
 prune draft

@@ -1,3 +1,51 @@
+Metadata-Version: 2.4
+Name: ambidose
+Version: 0.5.2
+Summary: Per-cell ambient dose removal for droplet scRNA-seq, using empty droplets to pin soup composition
+Author-email: "Zhao Li (李钊)" <leelieber@gmail.com>
+License-Expression: Apache-2.0
+Project-URL: Homepage, https://github.com/leelieber2025/AmbiDose
+Project-URL: Documentation, https://ambidose.readthedocs.io
+Project-URL: Changelog, https://ambidose.readthedocs.io/en/latest/changelog.html
+Project-URL: Source, https://github.com/leelieber2025/AmbiDose
+Project-URL: Issues, https://github.com/leelieber2025/AmbiDose/issues
+Keywords: single-cell,RNA-seq,ambient RNA,empty droplets,background removal,bioinformatics
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: anndata<0.14,>=0.8
+Requires-Dist: numpy>=1.23
+Requires-Dist: pandas>=1.3
+Requires-Dist: scipy>=1.7
+Requires-Dist: h5py>=3.0
+Requires-Dist: scanpy>=1.10
+Requires-Dist: scikit-learn>=1.0
+Requires-Dist: scikit-image>=0.19
+Requires-Dist: threadpoolctl>=3.0
+Requires-Dist: igraph>=0.10
+Requires-Dist: scfair>=0.7
+Provides-Extra: baselines
+Requires-Dist: scvi-tools>=1.0; extra == "baselines"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0; extra == "dev"
+Requires-Dist: ruff<0.17,>=0.4.0; extra == "dev"
+Provides-Extra: docs
+Requires-Dist: sphinx>=7.0; extra == "docs"
+Requires-Dist: sphinx-book-theme>=1.1; extra == "docs"
+Requires-Dist: myst-nb>=1.0; extra == "docs"
+Requires-Dist: sphinx-copybutton>=0.5; extra == "docs"
+Requires-Dist: sphinx-design>=0.5; extra == "docs"
+Dynamic: license-file
+
 # AmbiDose
 
 [![PyPI version](https://img.shields.io/pypi/v/ambidose.svg)](https://pypi.org/project/ambidose/)

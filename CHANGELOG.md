@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.2] - 2026-09-12
+
+### Changed
+
+- After high-χ single-winner ownership, a type no longer owns a gene
+  when its `r_t = mean/(n̄χ)` is at most 1, if some other type in the
+  same sample has `r_t > 1`. Types that still look ambient-level on a
+  gene do not inherit protection when a clear expressor is present.
+- SoupOnly extra-clear is not applied to a gene in the type that is the
+  exclusive `r_t` argmax (fold over the runner-up). A type that uniquely
+  leads on a gene is not extra-cleared on that gene. Libraries with a
+  single usable type are unchanged.
+- Unused rank-1 budget is not reallocated onto genes already above the
+  ρ=1 ambient ceiling (`r_t > 1`).
+- `estimate_chi` records empty-droplet NB2 overdispersion φ on
+  `uns["ambidose"]["empty_umi"]`. It is not used at subtraction.
+
+## [0.5.1] - 2026-09-10
+
+
+### Changed
+
+- Product dose path is `estimate_dose_adaptive`. Executed ρ uses a
+  sample-level unlabeled scale `s(q)`, `q = median(ρ̂) n̄ / λ_e` from
+  empty-droplet mean UMI (replaces a global 0.704). The map shrinks at
+  low q (floor 0.50) and expands at high q (cap 1.25). Shrink is blended
+  out as median selected ρ̂ approaches 0 so clean libraries are not
+  treated like fat-empty high-contamination runs. `estimate_chi` stores
+  `λ_e` in `uns["ambidose"]["empty_umi"]`; missing empties raise.
+- Default subtraction is dual-channel: rank-1 along χ under type
+  budgets, plus soupOnly extra-clear of unexpressed unowned genes that
+  may exceed `d_c`. Unsaturated rank-1 is spent inside cells; saturated
+  gene columns stay type-level; protected genes are allocated by library
+  size. High-χ U extra-clear uses an 80% χ-mass prefix. Pearson
+  reweighting reallocates unowned rank-1 without shrinking the type
+  budget.
+- Ownership: gap-cascade with noise-aware folds; ambient-ceiling
+  exceptions require cross-type specificity; high-χ U is revoked when a
+  minority of cells in the type exceeds the type ceiling.
+- `ambidose_rho_trust` is a run-state label, not a calibrated
+  probability that a cell was correctly corrected. Count monotonicity
+  (`0 ≤ corrected ≤ raw`) does not bound native-molecule loss.
+
 ## [0.3.3] - 2026-09-07
 
 ### Changed
