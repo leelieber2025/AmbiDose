@@ -2,7 +2,13 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from ambidose._budget import _cap_take_to_remaining, _realloc_unspent_rank1
+from ambidose._budget import (
+    _ambient_slope_support,
+    _analytic_anchor_cell_weights,
+    _cap_take_to_remaining,
+    _migrate_unspent_rank1,
+    _realloc_unspent_rank1,
+)
 from ambidose.datasets import make_barnyard_toy, make_toy
 from ambidose.metrics import assign_majority_genome, barnyard_kill_row, leakage_by_species
 from ambidose.pp import (
@@ -1680,3 +1686,66 @@ def test_realloc_skips_genes_above_rho1_ceiling():
     assert out[0] == pytest.approx(take[0])
     assert out[1] > take[1]
     assert out[2] == pytest.approx(take[2])
+
+
+def test_migrate_unspent_uses_same_budget_and_both_evidence_pools():
+    observed = np.array([10.0, 10.0, 10.0])
+    chi = np.array([0.2, 0.4, 0.4])
+    take = np.array([1.0, 0.0, 0.0])
+    is_p = np.array([True, False, False])
+    is_u = np.zeros(3, dtype=bool)
+    r_t = np.ones(3)
+    legacy = _realloc_unspent_rank1(take, observed, chi, 10.0, is_p, is_u, r_t)
+    moved = _migrate_unspent_rank1(take, observed, chi, 10.0, is_p, is_u, r_t)
+    assert float(moved.sum()) == pytest.approx(float(legacy.sum()))
+    assert moved[is_p].sum() > take[is_p].sum()
+    assert moved[~is_p].sum() > take[~is_p].sum()
+
+
+def test_migrate_unspent_evidence_limits_capacity_not_just_priority():
+    observed = np.array([100.0, 100.0])
+    chi = np.array([0.5, 0.5])
+    take = np.zeros(2)
+    is_p = np.array([True, False])
+    is_u = np.zeros(2, dtype=bool)
+    out = _migrate_unspent_rank1(
+        take,
+        observed,
+        chi,
+        40.0,
+        is_p,
+        is_u,
+        np.ones(2),
+        native_confidence=np.array([0.9, 0.0]),
+        ambient_support=np.array([0.0, 0.1]),
+    )
+    # Weak evidence limits authorized capacity; it cannot absorb the full leftover.
+    assert out[0] <= 10.0 + 1e-12
+    assert out[1] <= 10.0 + 1e-12
+    assert out.sum() < 40.0
+
+
+def test_ambient_slope_support_separates_rho_tracking_from_flat_expression():
+    library = np.full(4, 100.0)
+    dose = np.array([10.0, 20.0, 30.0, 40.0])
+    chi = np.array([0.5, 0.5])
+    # gene0 follows rho at the empty-droplet slope; gene1 is native-flat.
+    x = sparse.csr_matrix(np.column_stack([dose * chi[0], np.full(4, 20.0)]))
+    support = _ambient_slope_support(x, np.arange(4), library, chi, dose)
+    assert support[0] == pytest.approx(1.0)
+    assert support[1] == pytest.approx(0.0)
+
+
+def test_analytic_anchor_weights_fall_back_to_dose_rank_without_signal():
+    x = sparse.csr_matrix(np.array([[1, 0], [2, 0]], dtype=np.int64))
+    weights, meta = _analytic_anchor_cell_weights(
+        x,
+        np.array([0, 1]),
+        np.array([10.0, 20.0]),
+        np.array([0.5, 0.5]),
+        np.array([True, False]),
+        np.array([2.0, 1.0]),
+    )
+    assert meta["reliability"] == pytest.approx(0.0)
+    assert meta["anchor_weight"] == pytest.approx(0.0)
+    assert np.allclose(weights, [1.0, 0.5])

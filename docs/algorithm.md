@@ -1,6 +1,6 @@
 # AmbiDose algorithm (draft notes — not the product API)
 
-Product is **0.5.2** (`src/ambidose/`). 0.3.7 is archived at
+Product is **0.5.3** (`src/ambidose/`). 0.3.7 is archived at
 `archive/ambidose-0.3.7-pre-rewrite.zip` and `archive/ambidose-0.3.7-src/`.
 0.4.0–0.4.3 was a simplification experiment and was reverted.
 This document is a model sketch. The live subtract operator is the

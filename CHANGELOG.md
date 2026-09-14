@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.3] - 2026-09-14
+
+### Changed
+
+- Leftover rank-1 budget is evaluated jointly across protected and unprotected non-soupOnly genes within each library and type. Targets above the physical r_t = 1 ambient ceiling remain ineligible.
+- Within-type gene response to cell-specific rho now limits both the priority and capacity of leftover allocation. Protected targets also require this response and are scaled by one minus native confidence; unsupported residual budget remains unspent instead of being forced onto weak evidence. No fixed protected/unprotected split or cross-library calibration is used.
+- Protected-gene takes are allocated to cells by a Poisson noise-corrected blend of dose rank and the within-type soupOnly-anchor rate, falling back to dose rank when the anchor has no resolved signal.
+
 ## [0.5.2] - 2026-09-12
 
 ### Changed

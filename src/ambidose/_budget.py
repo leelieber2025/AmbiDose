@@ -304,6 +304,107 @@ def _realloc_unspent_rank1(
     return take + _alloc_budget(leftover, room, weights)
 
 
+def _ambient_slope_support(x, idx, library, chi, dose):
+    """Within-type evidence that gene abundance follows per-cell rho."""
+    idx = np.asarray(idx, dtype=np.int64)
+    n = np.asarray(library, dtype=np.float64)[idx]
+    d = np.asarray(dose, dtype=np.float64)
+    chi = np.asarray(chi, dtype=np.float64)
+    if idx.size == 0 or float(n.sum()) <= 0:
+        return np.zeros(chi.size, dtype=np.float64)
+    rho = np.divide(d, n, out=np.zeros_like(d), where=n > 0)
+    rho_bar = float(np.dot(n, rho) / n.sum())
+    centered = rho - rho_bar
+    denom = float(np.dot(n, centered * centered))
+    if denom <= 0:
+        return np.zeros(chi.size, dtype=np.float64)
+    covariance = np.asarray(centered @ x[idx]).ravel().astype(np.float64)
+    slope = covariance / denom
+    return np.clip(np.divide(slope, chi, out=np.zeros_like(slope), where=chi > 0), 0.0, 1.0)
+
+
+def _migrate_unspent_rank1(
+    take,
+    observed,
+    chi,
+    dose,
+    is_p,
+    is_u,
+    r_t,
+    *,
+    leftover_cap=None,
+    native_confidence=None,
+    ambient_support=None,
+):
+    """Allocate legacy-sized leftover by evidence across all non-U genes.
+
+    Protected and unprotected genes compete in one pool. Their weights use
+    within-library chi and r_t; every target must remain at or below the
+    physical rho=1 ambient ceiling. Protection never bypasses that evidence
+    requirement. No fixed protected/unprotected split is used.
+    """
+    old = _realloc_unspent_rank1(
+        take,
+        observed,
+        chi,
+        dose,
+        is_p,
+        is_u,
+        r_t,
+        leftover_cap=leftover_cap,
+    )
+    budget = max(float(np.sum(old) - np.sum(take)), 0.0)
+    rt = np.asarray(r_t, dtype=np.float64)
+    evidence = np.ones_like(rt)
+    if native_confidence is not None:
+        confidence = np.clip(np.asarray(native_confidence, dtype=np.float64), 0.0, 1.0)
+        evidence = np.where(is_p, 1.0 - confidence, evidence)
+    if ambient_support is not None:
+        support = np.clip(np.asarray(ambient_support, dtype=np.float64), 0.0, 1.0)
+        evidence = evidence * support
+    room = np.where(
+        is_u,
+        0.0,
+        np.maximum(observed - take, 0.0) * evidence,
+    )
+    weights = np.where(
+        is_u,
+        0.0,
+        np.asarray(chi, dtype=np.float64) * evidence / np.maximum(rt, 1.0),
+    )
+    weights = np.where(rt <= REALLOC_RT_MAX, weights, 0.0)
+    return take + _alloc_budget(budget, room, weights)
+
+
+def _analytic_anchor_cell_weights(x, idx, library, chi, anchor_mask, dose):
+    """Blend dose and anchor ranks using Poisson noise-corrected reliability."""
+    idx = np.asarray(idx, dtype=np.int64)
+    anchors = np.asarray(anchor_mask, dtype=bool)
+    local_dose = np.asarray(dose, dtype=np.float64)
+    mass = float(np.asarray(chi, dtype=np.float64)[anchors].sum())
+    dose_rank = pd.Series(local_dose).rank(pct=True, method="average").to_numpy()
+    if idx.size == 0 or mass <= 0:
+        return dose_rank, {"reliability": 0.0, "anchor_weight": 0.0}
+    n = np.asarray(library, dtype=np.float64)[idx]
+    exposure = n * mass
+    count = np.asarray(x[idx][:, anchors].sum(axis=1)).ravel().astype(np.float64)
+    rate = np.divide(count, exposure, out=np.zeros_like(count), where=exposure > 0)
+    sampling = np.divide(count, exposure**2, out=np.zeros_like(count), where=exposure > 0)
+    observed_var = float(np.var(rate))
+    noise_var = float(np.mean(sampling))
+    signal_var = max(observed_var - noise_var, 0.0)
+    reliability = signal_var / observed_var if observed_var > 0 else 0.0
+    anchor_weight = reliability / (1.0 + reliability)
+    anchor_rank = pd.Series(rate).rank(pct=True, method="average").to_numpy()
+    weights = (1.0 - anchor_weight) * dose_rank + anchor_weight * anchor_rank
+    return weights, {
+        "observed_variance": observed_var,
+        "sampling_variance": noise_var,
+        "reliability": reliability,
+        "anchor_weight": anchor_weight,
+    }
+
+
 def _subtract_row(y: np.ndarray, chi_g: np.ndarray, d: float) -> np.ndarray:
     """Rank-1 take. Used by the type-naive path and by research scripts."""
     return np.minimum(y, d * chi_g)

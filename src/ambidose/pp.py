@@ -14,14 +14,16 @@ from anndata import AnnData
 from ._budget import (
     CEILING_CROSS_TYPE_GATE,
     ENRICH_STRENGTH,
+    _ambient_slope_support,
+    _analytic_anchor_cell_weights,
     _apply_dose_enrichment,
     _cap_take_to_remaining,
     _confidence_weighted_take,
     _expand_take_to_cells,
     _high_chi_u_mask,
     _integerize_corrected,
+    _migrate_unspent_rank1,
     _pre_enrich_sat_mask,
-    _realloc_unspent_rank1,
     _revoke_u_with_expressing_subset,
     _selected_data_positions,
 )
@@ -538,6 +540,7 @@ def subtract(
                     continue
                 y_cl = np.asarray(x[idx].sum(axis=0)).ravel().astype(np.float64)
                 leftover_cap = None
+                anchor_u = np.zeros(adata.n_vars, dtype=bool)
                 if t in EMPTY_TYPES:
                     is_u = np.zeros(adata.n_vars, dtype=bool)
                     is_p = np.zeros(adata.n_vars, dtype=bool)
@@ -575,6 +578,7 @@ def subtract(
                         is_u, is_p, native_confidence, r_t = _type_masks(
                             x, n, chi, idx, **mask_kw, collision_exception=False
                         )
+                    anchor_u = is_u.copy()
                     mean_t = np.asarray(x[idx].mean(axis=0)).ravel()
                     n_bar_t = float(n[idx].mean()) if idx.size else 0.0
                     is_u = is_u & _soup_u_mask(
@@ -628,7 +632,8 @@ def subtract(
                 # and high-χ extra-clear.
                 take_rank1 = _confidence_weighted_take(y_cl, chi, d_sum, native_confidence, None)
                 take_rank1 = np.where(is_u, 0.0, take_rank1)
-                take_rank1 = _realloc_unspent_rank1(
+                ambient_support = _ambient_slope_support(x, idx, n, chi, d_idx)
+                take_rank1 = _migrate_unspent_rank1(
                     take_rank1,
                     y_cl,
                     chi,
@@ -637,7 +642,11 @@ def subtract(
                     is_u,
                     r_t,
                     leftover_cap=leftover_cap,
-                    rho_t=rho_t,
+                    native_confidence=native_confidence,
+                    ambient_support=ambient_support,
+                )
+                native_cell_weights, anchor_weight_meta = _analytic_anchor_cell_weights(
+                    x, idx, n, chi, anchor_u, d_idx
                 )
                 take_rank1_native = np.where(is_p, take_rank1, 0.0)
                 take_rank1_ambient = np.where(is_p, 0.0, take_rank1)
@@ -674,7 +683,7 @@ def subtract(
                     x,
                     idx,
                     take_rank1_native,
-                    n_idx,
+                    native_cell_weights,
                     data_positions=data_positions,
                     cell_keys=obs_keys[idx],
                 )
