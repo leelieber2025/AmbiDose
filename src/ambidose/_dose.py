@@ -380,6 +380,7 @@ def estimate_dose(
     soup_quantile: float = 0.75,
     min_genes: int = MIN_GENES,
     min_valid: int = MIN_VALID,
+    evidence_mode: str = "positive_genes",
     droplet_key: str | None = None,
     cell_label: str = "cell",
     layer: str | None = None,
@@ -396,6 +397,10 @@ def estimate_dose(
 
     Dose estimation deliberately does not use cross-type gene protection;
     local protection decisions must not perturb the shared per-cell dose.
+    ``evidence_mode="exposure"`` is an experimental alternative for typed
+    MLE: it retains zero-count MLEs and uses ``n_c · sum(χ_U)`` rather than
+    the number of positive U genes for shrinkage. The default remains
+    ``"positive_genes"``.
     """
     _reject_view(adata, "estimate_dose")
     _require_raw_integer_counts(adata, layer=layer, fname="estimate_dose")
@@ -410,6 +415,8 @@ def estimate_dose(
         raise ValueError("min_genes must be at least 1")
     if min_valid < 1:
         raise ValueError("min_valid must be at least 1")
+    if evidence_mode not in {"positive_genes", "exposure"}:
+        raise ValueError("evidence_mode must be 'positive_genes' or 'exposure'")
     if min_chi < 0:
         raise ValueError("min_chi must be nonnegative")
     if max_type_mean < 0:
@@ -468,6 +475,7 @@ def estimate_dose(
 
     rho_raw = np.full(adata.n_obs, np.nan, dtype=np.float64)
     n_valid = np.zeros(adata.n_obs, dtype=np.int64)
+    evidence_exposure = np.zeros(adata.n_obs, dtype=np.float64)
     fallback = np.zeros(adata.n_obs, dtype=bool)
     one_type = np.zeros(adata.n_obs, dtype=bool)
 
@@ -559,7 +567,9 @@ def estimate_dose(
                 )
             else:
                 rho_c, nv = _mle_rho_on_genes(x, n, chi, idx, gidx)
-            rho_c[nv < min_valid] = np.nan
+                evidence_exposure[idx] = n[idx] * float(chi[gidx].sum())
+            if evidence_mode == "positive_genes":
+                rho_c[nv < min_valid] = np.nan
             rho_raw[idx] = rho_c
             n_valid[idx] = nv
             fallback[idx] = fb
@@ -603,7 +613,10 @@ def estimate_dose(
             continue
         theta = np.log(rho_raw[fin] + 1e-8)
         mu = float(np.median(theta))
-        w = n_valid[fin] / (n_valid[fin] + SHRINK_K)
+        if evidence_mode == "exposure":
+            w = evidence_exposure[fin] / (evidence_exposure[fin] + SHRINK_K)
+        else:
+            w = n_valid[fin] / (n_valid[fin] + SHRINK_K)
         shrink_w[fin] = w
         rho[fin] = np.clip(np.exp(w * theta + (1.0 - w) * mu), 0.0, 1.0)
         if nan.size:
@@ -647,7 +660,11 @@ def estimate_dose(
         diag_samples[sample_id]["sample"] = "" if s is None else str(s)
         diag_samples[sample_id]["sample_is_global"] = s is None
     uns = dict(adata.uns.get("ambidose", {}))
-    uns["dose"] = {"method": "typed", "samples": diag_samples}
+    uns["dose"] = {
+        "method": "typed",
+        "evidence_mode": evidence_mode,
+        "samples": diag_samples,
+    }
     uns["dose_type_key"] = type_key
     uns["dose_sample_key"] = sample_key
     uns["dose_provenance"] = _dose_provenance(
@@ -1157,6 +1174,7 @@ def diagnose_dose_disagreement(
     return summary
 
 
+@_atomic_obs_uns
 def estimate_dose_adaptive(
     adata: AnnData,
     *,
@@ -1171,6 +1189,7 @@ def estimate_dose_adaptive(
     top_n: int = 100,
     min_chi: float = 1e-6,
     min_valid: int = MIN_VALID,
+    evidence_mode: str = "exposure",
 ) -> np.ndarray:
     """Select fixed dose on agreement and mixture dose on large disagreement.
 
@@ -1190,6 +1209,7 @@ def estimate_dose_adaptive(
         top_n=top_n,
         min_chi=min_chi,
         min_valid=min_valid,
+        evidence_mode=evidence_mode,
     )
     fixed_dose_meta = copy.deepcopy(adata.uns.get("ambidose", {}).get("dose", {}))
     estimate_dose_mixture(
@@ -1252,7 +1272,11 @@ def estimate_dose_adaptive(
         hat = float(np.median(selected_rho[mask])) if mask.any() else 0.0
         n_bar = float(n[mask].mean()) if mask.any() else 0.0
         q = hat * n_bar / lam_e if n_bar > 0 else float("nan")
-        scale = q_abs_scale(q, hat_rho=hat)
+        # A valid library can contain only empty droplets after cell calling
+        # (or after refinement).  There is no cell-level scale to estimate in
+        # that sample, so leave its selected dose empty and use the neutral
+        # scale rather than passing NaN to q_abs_scale().
+        scale = q_abs_scale(q, hat_rho=hat) if mask.any() else 1.0
         executed_rho[mask] = np.clip(selected_rho[mask] * scale, 0.0, 1.0)
         selected_samples[sample_id] = {
             "sample": "" if sample is None else str(sample),
@@ -1270,6 +1294,7 @@ def estimate_dose_adaptive(
     adata.obs[RHO_KEY] = executed_rho
     uns = dict(adata.uns.get("ambidose", {}))
     uns["dose"] = {
+        "evidence_mode": evidence_mode,
         "fixed": fixed_dose_meta,
         "selected": {"samples": selected_samples},
         "selection": selection_summary,

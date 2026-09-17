@@ -29,6 +29,10 @@ def make_toy(
 ) -> AnnData:
     """Two cell types plus empty droplets; ambient is lysis-weighted soup.
 
+    This is a compact workflow and edge-case fixture, not a calibrated
+    performance benchmark. Its synthetic depth and small gene space can
+    produce low sample-scale doses and ``over_removal`` trust flags.
+
     ``adata.uns['true_chi']`` is samples × genes (simplex). ``obs['droplet']``
     is ``empty`` or ``cell``. Counts are Poisson draws, stored as CSR.
     """

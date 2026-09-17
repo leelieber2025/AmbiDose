@@ -60,6 +60,78 @@ def _restrict_high_chi_to_single_winner(
     return {name: np.where(high, masks_sw[name], masks[name]) for name in masks}
 
 
+def _strip_ambient_level_owners(
+    masks: dict[str, np.ndarray],
+    type_means: dict[str, np.ndarray],
+    n_bar_by_type: dict[str, float],
+    chi: np.ndarray,
+    *,
+    rt_win: float = 1.0,
+) -> dict[str, np.ndarray]:
+    """Drop ownership when this type's r_t ≤ 1, but only if a real winner exists.
+
+    r_t = mean/(n̄ χ). A type with r_t ≤ 1 is still ambient-ceiling on that
+    gene. If some other type in the sample has r_t > 1, that type is the
+    expressor and ambient-level types must not inherit protection (kidney
+    Hb in non-erythroid). If no type clears r_t > 1, leave ownership
+    unchanged (species fragments on barnyards).
+    """
+    names = [t for t in masks if t in type_means]
+    if len(names) == 0:
+        return masks
+    chi = np.asarray(chi, dtype=np.float64)
+    rts = []
+    for t in names:
+        mean = np.asarray(type_means[t], dtype=np.float64)
+        nbar = float(n_bar_by_type.get(t, 0.0))
+        expected = nbar * chi
+        rt = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
+        rts.append(rt)
+    rt_mat = np.vstack(rts)
+    has_winner = np.any(rt_mat > float(rt_win), axis=0)
+    out = dict(masks)
+    for i, t in enumerate(names):
+        keep = (~has_winner) | (rt_mat[i] > float(rt_win))
+        out[t] = np.asarray(masks[t], dtype=bool) & keep
+    return out
+
+
+def _revoke_u_if_rt_winner(
+    is_u: np.ndarray,
+    type_name: str,
+    type_means: dict[str, np.ndarray],
+    n_bar_by_type: dict[str, float],
+    chi: np.ndarray,
+    *,
+    fold: float = OWNER_MIN_FOLD,
+) -> np.ndarray:
+    """Do not soupOnly a gene this type uniquely leads on r_t.
+
+    High-χ identity can sit below SOUP_ONLY_MAX_RT=0.4 (mean < 0.4 n̄χ)
+    and still be extra-cleared in its owner type. If this type is the
+    exclusive r_t argmax, it is the expressor and must not extra-clear.
+    Needs ≥2 types; a lone type is left unchanged. r_t>1 is not required:
+    that case is already excluded from U by the 0.4 cap.
+    """
+    names = [t for t in type_means if t in n_bar_by_type]
+    if len(names) < 2 or type_name not in names:
+        return is_u
+    chi = np.asarray(chi, dtype=np.float64)
+    rts = []
+    for t in names:
+        mean = np.asarray(type_means[t], dtype=np.float64)
+        nbar = float(n_bar_by_type[t])
+        expected = nbar * chi
+        rt = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
+        rts.append(rt)
+    rt_mat = np.vstack(rts)
+    i = names.index(type_name)
+    ranked = np.sort(rt_mat, axis=0)[::-1]
+    exclusive = ranked[0] >= float(fold) * np.maximum(ranked[1], 1e-9)
+    winner = rt_mat.argmax(axis=0)
+    return np.asarray(is_u, dtype=bool) & ~((winner == i) & exclusive)
+
+
 def _mt_gene_mask(var_names) -> np.ndarray:
     """Identify mitochondrial symbols while excluding MTOR/MT1A-like names.
 

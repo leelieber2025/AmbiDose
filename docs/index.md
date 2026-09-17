@@ -30,7 +30,7 @@ raw droplets + filtered cell barcodes
      (soupOnly may exceed d_c)
 ```
 
-Empty droplets determine the ambient composition $\chi_s$ for each sample. Each cell receives an operational scale $\rho_c$ and $\chi$-direction dose $d_c=\rho_c n_c$ (the rank-1 budget along $\chi_s$, not a cap on total UMI removal). The standard workflow (`denoise()`) writes non-negative integer counts to `adata.layers["ambidose_denoised"]` and, as its last step, also sets them as `adata.X` -- the original input moves to `adata.layers["raw_counts"]`.
+Empty droplets determine the ambient composition $\chi_s$ for each sample. Each cell receives an operational scale $\rho_c$ and $\chi$-direction dose $d_c=\rho_c n_c$ (the rank-1 budget along $\chi_s$; high-$\chi$ soupOnly genes have a bounded 1.10× soft allowance by default). The standard workflow (`denoise()`) writes non-negative integer counts to `adata.layers["ambidose_denoised"]` and, as its last step, also sets them as `adata.X` -- the original input moves to `adata.layers["raw_counts"]`.
 
 AmbiDose estimates ambient RNA and subtracts it. It does not fit a count posterior, correct batch effects, or assign cell-type names. Automatic Leiden groups are an operational identity for dose and subtraction. The usual whitelist is the matching Cell Ranger filtered barcodes, refined against χ. An external barcode list is accepted when that call is missing or unreliable. The CLI default without a whitelist is DIEM. Python callers may request DIEM, EmptyDrops, OrdMag, or a fixed cell count. χ is always estimated from the matching raw droplet matrix.
 

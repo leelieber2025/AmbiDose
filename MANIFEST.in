@@ -20,7 +20,6 @@ include docs/index.md
 include docs/installation.md
 include docs/quickstart.md
 include docs/faq.md
-include docs/algorithm.md
 include docs/citation.md
 include docs/changelog.md
 include docs/license.md

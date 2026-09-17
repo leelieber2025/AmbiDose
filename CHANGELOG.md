@@ -2,6 +2,75 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.5] - 2026-09-17
+
+### Changed
+
+- High-χ soupOnly extra-clear (the χ-mass-prefix-0.8 unexpressed-unowned
+  genes) is capped by default at 1.10× the remaining `d_c` after rank-1,
+  instead of unbounded. Configurable via `subtract()`/`denoise()`'s new
+  `cap_high_u_to_remaining` (default `True`) and `high_u_remaining_multiplier`
+  (default `1.10`). Low-χ U is unchanged (already capped at remaining `d_c`).
+- `estimate_dose_adaptive()` (the `denoise()` default dose path) shrinks
+  per-cell dose toward the sample median using each cell's ambient exposure
+  (library size × ambient χ mass on unexpressed-unowned genes) rather than
+  the count of positive-evidence genes. New `evidence_mode` parameter on
+  `estimate_dose()`, `estimate_dose_adaptive()`, `subtract()`, and
+  `denoise()`; `estimate_dose()`'s own default is unchanged
+  (`"positive_genes"`), `estimate_dose_adaptive()`'s default is now
+  `"exposure"`.
+
+### Fixed
+
+- A sample with no cells carrying a valid selected dose (for example, every
+  droplet fell back to empty after refinement) no longer passes NaN into the
+  unlabeled-scale calculation; it now uses the neutral scale (1.0).
+- `estimate_dose_adaptive()` now rolls back `obs`/`uns` on any exception,
+  matching `estimate_dose()`'s existing atomicity.
+- `subtract()` called on its own (not via `denoise()`) with the default
+  `dose="ambidose_dose"` and no explicit `droplet_key` now reuses the
+  droplet grouping recorded when that dose was estimated, instead of
+  resolving it independently.
+- Cells scored through the mixture-dose fallback path now report QC
+  fallback status consistent with `ambidose_mixture_status`, instead of
+  carrying over the typed-MLE path's fallback flag.
+
+### Added
+
+- `subtract()` warns when `type_key` is given together with
+  `clip_negative=False`, since that combination silently ignores `type_key`
+  and uses the untyped continuous χ-direction path.
+
+### Documentation
+
+- `simulate_barnyard()`'s docstring notes it is a compact workflow/edge-case
+  fixture, not a calibrated performance benchmark.
+
+## [0.5.3] - 2026-09-14
+
+### Changed
+
+- Leftover rank-1 budget is evaluated jointly across protected and unprotected non-soupOnly genes within each library and type. Targets above the physical r_t = 1 ambient ceiling remain ineligible.
+- Within-type gene response to cell-specific rho now limits both the priority and capacity of leftover allocation. Protected targets also require this response and are scaled by one minus native confidence; unsupported residual budget remains unspent instead of being forced onto weak evidence. No fixed protected/unprotected split or cross-library calibration is used.
+- Protected-gene takes are allocated to cells by a Poisson noise-corrected blend of dose rank and the within-type soupOnly-anchor rate, falling back to dose rank when the anchor has no resolved signal.
+
+## [0.5.2] - 2026-09-12
+
+### Changed
+
+- After high-χ single-winner ownership, a type no longer owns a gene
+  when its `r_t = mean/(n̄χ)` is at most 1, if some other type in the
+  same sample has `r_t > 1`. Types that still look ambient-level on a
+  gene do not inherit protection when a clear expressor is present.
+- SoupOnly extra-clear is not applied to a gene in the type that is the
+  exclusive `r_t` argmax (fold over the runner-up). A type that uniquely
+  leads on a gene is not extra-cleared on that gene. Libraries with a
+  single usable type are unchanged.
+- Unused rank-1 budget is not reallocated onto genes already above the
+  ρ=1 ambient ceiling (`r_t > 1`).
+- `estimate_chi` records empty-droplet NB2 overdispersion φ on
+  `uns["ambidose"]["empty_umi"]`. It is not used at subtraction.
+
 ## [0.5.1] - 2026-09-10
 
 

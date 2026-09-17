@@ -39,6 +39,11 @@ amdose.denoise(toy, sample_key=None, empty_umi_max=80, type_key="cell_type")
 print(toy.layers["ambidose_denoised"].shape)
 ```
 
+This toy is intended to verify installation and exercise the workflow. It is
+not a quantitative benchmark: its synthetic gene space and depth can trigger
+low-dose scaling and `over_removal` trust flags. Evaluate performance on a
+real held-out dataset or a ground-truth benchmark instead.
+
 ## Development install
 
 ```bash

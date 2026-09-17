@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -14,14 +15,16 @@ from anndata import AnnData
 from ._budget import (
     CEILING_CROSS_TYPE_GATE,
     ENRICH_STRENGTH,
+    _ambient_slope_support,
+    _analytic_anchor_cell_weights,
     _apply_dose_enrichment,
     _cap_take_to_remaining,
     _confidence_weighted_take,
     _expand_take_to_cells,
     _high_chi_u_mask,
     _integerize_corrected,
+    _migrate_unspent_rank1,
     _pre_enrich_sat_mask,
-    _realloc_unspent_rank1,
     _revoke_u_with_expressing_subset,
     _selected_data_positions,
 )
@@ -111,6 +114,8 @@ from ._ownership import (
     _mt_gene_mask,
     _p_set_is_soup_like,
     _restrict_high_chi_to_single_winner,
+    _revoke_u_if_rt_winner,
+    _strip_ambient_level_owners,
     _type_masks,
 )
 from ._ownership import (
@@ -148,6 +153,7 @@ from ._shared import (
     _chi_for_obs,
     _chi_vector,
     _configure_scanpy_n_jobs,
+    _nb2_phi_from_empty,
     _profile,
     _reject_view,
     _require_raw_integer_counts,
@@ -240,7 +246,8 @@ def estimate_chi(
         raise KeyError(f"sample_key={sample_key!r} not in adata.obs")
     use_sample = sample_key is not None
     if not use_sample:
-        chi = _profile(x[empty])
+        x_empty = x[empty]
+        chi = _profile(x_empty)
         adata.uns.pop(CHI_KEY, None)
         adata.var[CHI_KEY] = chi
         run = dict(adata.uns.get("ambidose", {}))
@@ -256,6 +263,7 @@ def estimate_chi(
                 "sample": "",
                 "lam_e": float(n[empty].mean()),
                 "n_empty": int(empty.sum()),
+                "phi": _nb2_phi_from_empty(x_empty),
             }
         }
         adata.uns["ambidose"] = run
@@ -276,11 +284,13 @@ def estimate_chi(
                 f"sample {name!r}: need {min_empty} empty droplets, got {int(mask.sum())}"
             )
         names.append(str(name))
-        rows.append(_profile(x[mask], sample=str(name)))
+        x_empty = x[mask]
+        rows.append(_profile(x_empty, sample=str(name)))
         empty_umi[_sample_storage_id(str(name))] = {
             "sample": str(name),
             "lam_e": float(n[mask].mean()),
             "n_empty": int(mask.sum()),
+            "phi": _nb2_phi_from_empty(x_empty),
         }
     chi = np.vstack(rows)
     if CHI_KEY in adata.var.columns:
@@ -315,6 +325,8 @@ def subtract(
     empirical_margin: bool = True,
     cross_type_anchor: bool = True,
     relax_hk_when_soup_like: bool = False,
+    cap_high_u_to_remaining: bool = True,
+    high_u_remaining_multiplier: float = 1.10,
     n_jobs: int | None = None,
 ) -> AnnData:
     """Subtract a rank-1 take along χ, plus soupOnly extra-clear.
@@ -338,6 +350,8 @@ def subtract(
     ``clip_negative=False``.
     """
     _validate_output_layer(layer=layer, layer_out=layer_out)
+    if high_u_remaining_multiplier < 0 or not np.isfinite(high_u_remaining_multiplier):
+        raise ValueError("high_u_remaining_multiplier must be finite and nonnegative")
     _reject_view(adata, "subtract")
     if clip_negative:
         _require_raw_integer_counts(adata, layer=layer, fname="subtract")
@@ -372,11 +386,21 @@ def subtract(
     if over_n.any():
         raise ValueError("dose exceeds n_umi; stored and executed dose must be identical")
 
+    # In a stepwise workflow, inherit the droplet grouping recorded with the
+    # stored dose when subtract() is called with its public default None.
+    if isinstance(dose, str) and dose == DOSE_KEY and droplet_key is None:
+        stored_run = adata.uns.get("ambidose", {})
+        stored_provenance = stored_run.get("dose_provenance")
+        if isinstance(stored_provenance, dict):
+            droplet_key = stored_provenance.get("droplet_key")
+        elif isinstance(stored_run.get("droplet_key"), str):
+            droplet_key = stored_run["droplet_key"]
     samples = _sample_names(adata, sample_key)
     is_cell = _resolve_cell_mask(adata, droplet_key, cell_label)
     if (d_v[~is_cell] > 0).any():
         raise ValueError("positive dose found on non-cell droplets")
     use_sample = samples is not None
+    type_key_explicit = type_key is not None
     if type_key is None:
         type_key = _default_type_key(adata)
     if type_key is not None and type_key not in adata.obs.columns:
@@ -385,6 +409,13 @@ def subtract(
         shown = cols[:20]
         more = f", and {len(cols) - 20} more" if len(cols) > 20 else ""
         raise KeyError(f"type_key={type_key!r} not in adata.obs (available: {shown}{more})")
+    if type_key_explicit and not clip_negative:
+        warnings.warn(
+            "type_key is ignored when clip_negative=False; subtraction uses the "
+            "continuous untyped χ-direction path and does not write native_genes_by_type",
+            UserWarning,
+            stacklevel=2,
+        )
     if isinstance(dose, str) and dose == DOSE_KEY:
         run = adata.uns.get("ambidose", {})
         provenance = run.get("dose_provenance")
@@ -455,6 +486,7 @@ def subtract(
                 sample_key=sample_key if s is not None else None,
                 sample_name=s,
             )
+
             in_s = sample_of == s
             types_s_all = np.where(in_s, types, EMPTY_TYPE)
             type_names_s = list(pd.unique(types[in_s]))
@@ -482,6 +514,12 @@ def subtract(
             dominant_masks = _restrict_high_chi_to_single_winner(
                 dominant_masks, dominant_masks_sw, chi
             )
+            n_bar_s = {
+                t: float(n[type_indices_s[t]].mean())
+                for t in type_means
+                if type_indices_s.get(t) is not None and type_indices_s[t].size
+            }
+            dominant_masks = _strip_ambient_level_owners(dominant_masks, type_means, n_bar_s, chi)
             sample_n_meta = int(n_meta_s)
             ceiling_gate_s: dict[str, np.ndarray] | None = None
             if CEILING_CROSS_TYPE_GATE:
@@ -524,6 +562,7 @@ def subtract(
                     continue
                 y_cl = np.asarray(x[idx].sum(axis=0)).ravel().astype(np.float64)
                 leftover_cap = None
+                anchor_u = np.zeros(adata.n_vars, dtype=bool)
                 if t in EMPTY_TYPES:
                     is_u = np.zeros(adata.n_vars, dtype=bool)
                     is_p = np.zeros(adata.n_vars, dtype=bool)
@@ -561,6 +600,7 @@ def subtract(
                         is_u, is_p, native_confidence, r_t = _type_masks(
                             x, n, chi, idx, **mask_kw, collision_exception=False
                         )
+                    anchor_u = is_u.copy()
                     mean_t = np.asarray(x[idx].mean(axis=0)).ravel()
                     n_bar_t = float(n[idx].mean()) if idx.size else 0.0
                     is_u = is_u & _soup_u_mask(
@@ -574,6 +614,7 @@ def subtract(
                         apply_rt_and_collision=True,
                     )
                     is_u = _revoke_u_with_expressing_subset(x, idx, n, chi, is_u)
+                    is_u = _revoke_u_if_rt_winner(is_u, t, type_means, n_bar_s, chi)
                     # The gap-cascade's wider ownership (dominant_masks) can
                     # protect more genes than the frozen single-winner rule
                     # (dominant_masks_sw) would have, which frees up more of
@@ -608,13 +649,26 @@ def subtract(
                 # weighted by d_c; native genes stay library-weighted so noisy dose
                 # estimates do not create artificial within-type expression structure.
                 # soupOnly extra-clears unexpressed unowned genes when rho_t
-                # is above the floor. High-χ U (χ-mass prefix 0.8) is
-                # unbounded; low-χ U is capped at remaining d_c after rank-1
-                # and high-χ extra-clear.
+                # is above the floor. High-χ U (χ-mass prefix 0.8) receives a
+                # small, explicit soft allowance beyond remaining d_c by
+                # default; low-χ U is capped at remaining d_c.
                 take_rank1 = _confidence_weighted_take(y_cl, chi, d_sum, native_confidence, None)
                 take_rank1 = np.where(is_u, 0.0, take_rank1)
-                take_rank1 = _realloc_unspent_rank1(
-                    take_rank1, y_cl, chi, d_sum, is_p, is_u, r_t, leftover_cap=leftover_cap
+                ambient_support = _ambient_slope_support(x, idx, n, chi, d_idx)
+                take_rank1 = _migrate_unspent_rank1(
+                    take_rank1,
+                    y_cl,
+                    chi,
+                    d_sum,
+                    is_p,
+                    is_u,
+                    r_t,
+                    leftover_cap=leftover_cap,
+                    native_confidence=native_confidence,
+                    ambient_support=ambient_support,
+                )
+                native_cell_weights, anchor_weight_meta = _analytic_anchor_cell_weights(
+                    x, idx, n, chi, anchor_u, d_idx
                 )
                 take_rank1_native = np.where(is_p, take_rank1, 0.0)
                 take_rank1_ambient = np.where(is_p, 0.0, take_rank1)
@@ -651,15 +705,23 @@ def subtract(
                     x,
                     idx,
                     take_rank1_native,
-                    n_idx,
+                    native_cell_weights,
                     data_positions=data_positions,
                     cell_keys=obs_keys[idx],
                 )
+                if cap_high_u_to_remaining:
+                    rank1_lost = row_before - np.asarray(x[idx].sum(axis=1)).ravel()
+                    high_u_remaining = np.clip(d_idx - rank1_lost, 0.0, None) * float(
+                        high_u_remaining_multiplier
+                    )
+                    take_u_high = _cap_take_to_remaining(take_u_high, high_u_remaining)
+                else:
+                    high_u_remaining = d_idx
                 _expand_take_to_cells(
                     x,
                     idx,
                     take_u_high,
-                    d_idx,
+                    high_u_remaining,
                     data_positions=data_positions,
                     cell_keys=obs_keys[idx],
                 )
@@ -728,7 +790,8 @@ def subtract(
 
     if clip_negative:
         np.maximum(x.data, 0.0, out=x.data)
-        # soupOnly extra-clear is capped at remaining d_c after rank-1.
+        # soupOnly extra-clear is capped at remaining d_c after rank-1 for
+        # low-χ U and at the configured soft allowance for high-χ U.
         # Do not scale the whole row back to d_c: that put soup UMIs back
         # after they were cleared. Rank-1 take is already bounded by d_c.
         x = _integerize_corrected(raw_x, x, gene_keys=gene_keys)
@@ -801,6 +864,11 @@ def _write_rho_trust(
         else:
             used_mixture = np.zeros(n, dtype=bool)
         n_genes = np.where(used_mixture, mixture_genes, n_genes)
+        if "ambidose_mixture_status" in adata.obs:
+            mixture_fallback = (
+                adata.obs["ambidose_mixture_status"].astype(str).to_numpy() == "quantile_fallback"
+            )
+            fallback = np.where(used_mixture, mixture_fallback, fallback)
     one_type = (
         adata.obs["ambidose_one_type"].to_numpy(dtype=bool)
         if "ambidose_one_type" in adata.obs
@@ -891,9 +959,10 @@ def _write_rho_trust(
         "note": (
             "QC flags apply to quantitative interpretation of ambidose_rho, "
             "not to cell filtering. d_c is the χ-direction rank-1 budget, not a "
-            "cap on total UMI removal. under_execution means less than half of "
-            "that budget was removed; over_removal means total removal exceeded "
-            "d_c by more than 5% (soupOnly extra-clear is allowed to do this) "
+            "cap on total UMI removal; high-χ U has a bounded soft allowance. "
+            "under_execution means less than half of that budget was removed; "
+            "over_removal means total removal exceeded d_c by more than 5% "
+            "(usually high-χ soupOnly extra-clear) "
             "or exceeded half of the cell total."
         ),
     }
@@ -1187,8 +1256,11 @@ def denoise(
     layer: str | None = None,
     layer_out: str = LAYER_OUT,
     clip_negative: bool = True,
+    evidence_mode: str = "exposure",
     cross_type_anchor: bool = True,
     relax_hk_when_soup_like: bool = False,
+    cap_high_u_to_remaining: bool = True,
+    high_u_remaining_multiplier: float = 1.10,
     typing_fast: bool = True,
     n_jobs: int | None = None,
     report: bool | str | Path = False,
@@ -1236,6 +1308,9 @@ def denoise(
     a two-component fit.
     ``estimate_dose()`` remains the fixed quantile-floor estimator used inside
     this path; it is not an alternative product entry.
+    ``evidence_mode`` controls typed-MLE evidence. The default ``"exposure"``
+    retains zero-count MLEs and uses total ambient exposure for shrinkage;
+    ``"positive_genes"`` is available for the previous behavior.
     ``cross_type_anchor`` enables subtraction-only cross-cell structure and
     cross-type-anchor protection; dose estimation remains unchanged.
     ``typing_fast`` (default True) uses a cheaper graph when the library has
@@ -1309,8 +1384,11 @@ def denoise(
             layer=layer,
             layer_out=layer_out,
             clip_negative=clip_negative,
+            evidence_mode=evidence_mode,
             cross_type_anchor=cross_type_anchor,
             relax_hk_when_soup_like=relax_hk_when_soup_like,
+            cap_high_u_to_remaining=cap_high_u_to_remaining,
+            high_u_remaining_multiplier=high_u_remaining_multiplier,
             typing_fast=typing_fast,
             n_jobs=n_jobs,
             report=report,
@@ -1524,6 +1602,7 @@ def denoise(
             droplet_key=droplet_key,
             sample_key=sk,
             layer=layer,
+            evidence_mode=evidence_mode,
         )
     with _StageProgress("subtracting ambient counts"):
         subtract(
@@ -1536,6 +1615,8 @@ def denoise(
             clip_negative=clip_negative,
             cross_type_anchor=cross_type_anchor,
             relax_hk_when_soup_like=relax_hk_when_soup_like,
+            cap_high_u_to_remaining=cap_high_u_to_remaining,
+            high_u_remaining_multiplier=high_u_remaining_multiplier,
             n_jobs=resolved_n_jobs,
         )
     adata.layers["raw_counts"] = raw_count_matrix(adata).copy()

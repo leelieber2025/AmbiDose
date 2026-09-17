@@ -548,6 +548,31 @@ def _profile(x_empty: sparse.spmatrix, *, sample: str | None = None) -> np.ndarr
     return totals / s
 
 
+def _nb2_phi_from_empty(x_empty: sparse.spmatrix, *, min_mean: float = 0.1) -> float:
+    """Pooled NB2 overdispersion φ from empty droplets: Var = μ + φ μ².
+
+    Method of moments on columns with mean ≥ ``min_mean``. One library-level
+    φ, not a dataset cutoff. Used to widen leftover ambient se beyond Poisson.
+    """
+    n = int(x_empty.shape[0])
+    if n < 3:
+        return 0.0
+    x = x_empty.tocsr()
+    mu = np.asarray(x.sum(axis=0)).ravel().astype(np.float64) / n
+    ss = np.asarray(x.multiply(x).sum(axis=0)).ravel().astype(np.float64)
+    var = np.maximum(ss / n - mu * mu, 0.0)
+    ok = mu >= float(min_mean)
+    if not np.any(ok):
+        ok = mu > 0
+    if not np.any(ok):
+        return 0.0
+    num = float(np.maximum(var[ok] - mu[ok], 0.0).sum())
+    den = float(np.square(np.maximum(mu[ok], 1e-12)).sum())
+    if den <= 0.0:
+        return 0.0
+    return float(num / den)
+
+
 def _validate_chi_vector(values, n_vars: int, *, where: str) -> np.ndarray:
     chi = np.asarray(values, dtype=np.float64)
     if chi.shape != (n_vars,):

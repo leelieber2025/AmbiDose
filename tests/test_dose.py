@@ -947,3 +947,54 @@ def test_adaptive_q_scale_uses_empty_mean():
     scale = q_abs_scale(hat * n_bar / lam, hat_rho=hat)
     np.testing.assert_allclose(adata.obs.loc[cells, RHO_KEY], (selected / n)[cells] * scale)
     assert adata.uns["ambidose"]["dose"]["samples"]["global"]["q_scale"] == pytest.approx(scale)
+
+
+def test_adaptive_skips_sample_with_no_cells():
+    from ambidose.pp import estimate_dose_adaptive
+
+    adata = _cells(make_toy(n_samples=2, n_cells=20, n_empty=20, seed=31))
+    first_sample = str(adata.obs["sample"].iloc[0])
+    no_cells = (adata.obs["sample"].astype(str) == first_sample) & (
+        adata.obs["ambidose_droplet"].astype(str) == "cell"
+    )
+    adata.obs.loc[no_cells, "ambidose_droplet"] = "empty"
+    estimate_chi(adata, droplet_key="ambidose_droplet", sample_key="sample")
+
+    estimate_dose_adaptive(
+        adata,
+        type_key="cell_type",
+        droplet_key="ambidose_droplet",
+        sample_key="sample",
+    )
+
+    sample_meta = next(
+        rec
+        for rec in adata.uns["ambidose"]["dose"]["samples"].values()
+        if rec["sample"] == first_sample
+    )
+    assert sample_meta["n_cell"] == 0
+    assert sample_meta["q_scale"] == 1.0
+    assert np.all(adata.obs.loc[no_cells, DOSE_KEY] == 0)
+
+
+def test_subtract_inherits_droplet_key_from_adaptive_dose():
+    adata = _cells(make_toy(n_samples=1, n_cells=30, n_empty=30, seed=32))
+    estimate_chi(adata, sample_key=None)
+    from ambidose.pp import estimate_dose_adaptive
+
+    estimate_dose_adaptive(adata, type_key="cell_type")
+    subtract(adata, type_key="cell_type")
+    assert LAYER_OUT in adata.layers
+
+
+def test_continuous_subtract_warns_when_type_key_is_given():
+    adata = _cells(make_toy(n_samples=1, n_cells=30, n_empty=30, seed=33))
+    estimate_chi(adata, sample_key=None)
+    estimate_dose(adata, type_key="cell_type")
+    with pytest.warns(UserWarning, match="type_key is ignored"):
+        subtract(
+            adata,
+            dose=adata.obs[DOSE_KEY].to_numpy(),
+            type_key="cell_type",
+            clip_negative=False,
+        )
