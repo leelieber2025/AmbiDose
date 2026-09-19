@@ -2,6 +2,102 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.6] - 2026-09-18
+
+Several dose, ownership, and soupOnly thresholds that were fixed constants
+fitted on a small number of evaluation panels are now computed from each
+sample's own data, or dropped where the fixed value added nothing beyond
+an existing bound.
+
+### Changed
+
+- `estimate_dose_adaptive()` no longer rescales the selected ρ by a fixed
+  piecewise curve `s(q)`. Executed dose is the selected estimator directly.
+  Per-sample `q = median(ρ̂) n̄ / λ_e` is still recorded as a diagnostic.
+- The adaptive dose estimator switches from the fixed to the mixture
+  estimate when their disagreement exceeds the Poisson sampling error of
+  the two estimates, instead of a fixed fold/gap threshold.
+- SoupOnly extra-clear now covers the full χ mass of unexpressed-unowned
+  (U) genes, not a fixed 80% prefix, and is capped by default at the
+  remaining `d_c` after rank-1 with no soft allowance beyond it
+  (`high_u_remaining_multiplier` default is now `1.0`, was `1.10`).
+- SoupOnly extra-clear eligibility is now a per-gene test (is this type's
+  mean compatible with that type's own ρ, under a Poisson sampling
+  margin) instead of a single fixed cross-type ratio cutoff.
+- Exclusive gene ownership is now decided by comparing each candidate's
+  conservative mean (point estimate minus its sampling error) against the
+  runner-up, instead of requiring a fixed fold-change margin. Housekeeping
+  ties stay unowned.
+- High-χ unique-argmax ownership uses the Lorenz-curve knee of the
+  sample's own χ to decide single-winner eligibility, instead of a fixed
+  χ-mass threshold.
+- A merged fragment now inherits its meta-group's ownership only when it
+  is the sole member of that group or its own mean still exceeds every
+  other meta-group's mean, instead of a fixed minimum-share threshold.
+- Several dose defaults are now derived from the sample instead of fixed:
+  the χ prefix used for evidence genes is the sample's own Lorenz knee,
+  the ratio floor is calibrated so empty droplets land at a median ρ̂ of
+  about 1, and the unexpressed-gene mean floor is the sample's own
+  Poisson-expected value rather than a fixed UMI count.
+- Dose log-ρ shrinkage now uses each sample's own median evidence
+  (valid-gene count or exposure) as the shrinkage weight, instead of a
+  fixed constant.
+- The opt-in `relax_hk_when_soup_like` test now uses a Poisson ceiling on
+  leftover native mass versus the empty-droplet χ, run whenever expected
+  soup on that gene is at least 1 UMI, instead of two fixed thresholds.
+
+### Removed
+
+- The global soupOnly ρ floor: extra-clear eligibility is already bounded
+  by the remaining `d_c` and by the per-gene type-ρ-compatibility test
+  above, so the separate floor was redundant.
+- Unused `REALLOC_CAP_FOLD`, `_topk_owner_masks`, and `OWNER_TOP_K` (dead
+  code, not reachable from the product path).
+
+## [0.5.5] - 2026-09-17
+
+### Changed
+
+- High-χ soupOnly extra-clear (the χ-mass-prefix-0.8 unexpressed-unowned
+  genes) is capped by default at 1.10× the remaining `d_c` after rank-1,
+  instead of unbounded. Configurable via `subtract()`/`denoise()`'s new
+  `cap_high_u_to_remaining` (default `True`) and `high_u_remaining_multiplier`
+  (default `1.10`). Low-χ U is unchanged (already capped at remaining `d_c`).
+- `estimate_dose_adaptive()` (the `denoise()` default dose path) shrinks
+  per-cell dose toward the sample median using each cell's ambient exposure
+  (library size × ambient χ mass on unexpressed-unowned genes) rather than
+  the count of positive-evidence genes. New `evidence_mode` parameter on
+  `estimate_dose()`, `estimate_dose_adaptive()`, `subtract()`, and
+  `denoise()`; `estimate_dose()`'s own default is unchanged
+  (`"positive_genes"`), `estimate_dose_adaptive()`'s default is now
+  `"exposure"`.
+
+### Fixed
+
+- A sample with no cells carrying a valid selected dose (for example, every
+  droplet fell back to empty after refinement) no longer passes NaN into the
+  unlabeled-scale calculation; it now uses the neutral scale (1.0).
+- `estimate_dose_adaptive()` now rolls back `obs`/`uns` on any exception,
+  matching `estimate_dose()`'s existing atomicity.
+- `subtract()` called on its own (not via `denoise()`) with the default
+  `dose="ambidose_dose"` and no explicit `droplet_key` now reuses the
+  droplet grouping recorded when that dose was estimated, instead of
+  resolving it independently.
+- Cells scored through the mixture-dose fallback path now report QC
+  fallback status consistent with `ambidose_mixture_status`, instead of
+  carrying over the typed-MLE path's fallback flag.
+
+### Added
+
+- `subtract()` warns when `type_key` is given together with
+  `clip_negative=False`, since that combination silently ignores `type_key`
+  and uses the untyped continuous χ-direction path.
+
+### Documentation
+
+- `simulate_barnyard()`'s docstring notes it is a compact workflow/edge-case
+  fixture, not a calibrated performance benchmark.
+
 ## [0.5.3] - 2026-09-14
 
 ### Changed

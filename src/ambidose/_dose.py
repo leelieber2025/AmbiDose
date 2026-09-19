@@ -9,10 +9,8 @@ import warnings
 import numpy as np
 import pandas as pd
 from anndata import AnnData
-from scipy.optimize import nnls
 
 from ._shared import (
-    CHI_KEY,
     DOSE_KEY,
     DROPLET_KEY,
     EMPTY_TYPES,
@@ -95,72 +93,41 @@ def _mle_rho_on_genes(x, n, chi, cell_idx, gidx) -> tuple[np.ndarray, np.ndarray
     return rho, n_valid
 
 
-NOISE_K = 2.0  # module constant; see _unexpressed_mask
-# Housekeeping sits above this library fraction; true per-gene soup stays below.
+NOISE_K = 2.0
 U_MAX_LIBRARY_FRAC = 0.003
-# soupOnly extra-clear only genes well below the ρ=1 ceiling. True soup
-# has mean/(n̄χ) ≈ ρ (typically 0.01–0.3). Mid-ceiling leftover genes on
-# zero-ambient libraries sit at 0.4–0.85 and must not be wiped.
-SOUP_ONLY_MAX_RT = 0.4
-# Type-level ρ below this: no soupOnly extra-clear, rank-1 only.
-# Σd_c/Σn_c is the dose-weighted type ρ. Almost-uncontaminated types must
-# not wipe U genes the same way heavily contaminated types do.
-SOUP_ONLY_RHO_FLOOR = 0.01
-# Sample-level executed scale s(q), q = median(ρ̂) n̄ / λ_e.
-# Piecewise log-linear on natural-depth PBMC inject + realistic_gt;
-# Cargnelli held out. Expand cap 1.25, shrink floor 0.50.
-# docs/research/piecewise_caps_research_20260909.md
-Q_SCALE_T = 316.59502562631263
-Q_SCALE_A_LO = -1.4412479601313954
-Q_SCALE_B_LO = 0.26081257417233045
-Q_SCALE_A_HI = -1.5088953130300833
-Q_SCALE_B_HI = 0.27637025546757915
-Q_SCALE_EXPAND_CAP = 1.25
-Q_SCALE_SHRINK_FLOOR = 0.50
-# Blend shrink toward identity as median selected ρ̂ → 0.
-# w = clip(ρ̂ / LOW_RHO, 0, 1); executed = (1-w)*1 + w*s(q) when s(q)<1.
-# Hard cut at 0.10 jumped GSE (ρ̂=0.091) to s=1. Curve a,b,T unchanged.
-Q_SCALE_LOW_RHO = 0.10
+# y/(nχ) quantile when MLE is not identified and empty calibration is unavailable.
+DOSE_RATIO_QUANTILE = 0.5
 
 
-def _q_curve_scale(q: float) -> float:
-    """Piecewise s(q) without the low-ρ̂ blend."""
-    if not np.isfinite(q):
-        raise ValueError(f"q must be finite, got {q!r}")
-    if q <= 0:
-        return 1.0
-    if q < Q_SCALE_T:
-        s = float(np.exp(Q_SCALE_A_LO + Q_SCALE_B_LO * np.log(q)))
-        s = min(s, 1.0)
-        s = max(s, Q_SCALE_SHRINK_FLOOR)
-    else:
-        s = float(np.exp(Q_SCALE_A_HI + Q_SCALE_B_HI * np.log(q)))
-        s = max(s, 1.0)
-        s = min(s, Q_SCALE_EXPAND_CAP)
-    return float(np.clip(s, Q_SCALE_SHRINK_FLOOR, Q_SCALE_EXPAND_CAP))
+def _expression_floor(n_cells: int, max_type_mean: float | None) -> float:
+    """Mean floor for the unexpressed test. ``None`` is 0 (Poisson only)."""
+    if max_type_mean is not None:
+        return float(max_type_mean)
+    return 0.0
+
+
+def _chi_prefix_n(chi: np.ndarray, *, min_n: int = MIN_GENES) -> int:
+    """Gene count at this sample's χ Lorenz knee, at least ``min_n``."""
+    chi = np.asarray(chi, dtype=np.float64)
+    if chi.size == 0:
+        return max(int(min_n), 1)
+    order = np.argsort(-chi)
+    total = float(chi[order].sum())
+    if total <= 0:
+        return max(int(min_n), 1)
+    c = np.cumsum(chi[order]) / total
+    x = np.arange(1, c.size + 1, dtype=np.float64) / c.size
+    n = int(np.argmax(c - x)) + 1
+    return max(n, int(min_n), 1)
 
 
 def q_abs_scale(q: float, *, hat_rho: float) -> float:
-    """Map unlabeled q = median(ρ̂) n̄ / λ_e to a sample executed scale.
-
-    ``q<=0`` is a legitimate zero-ambient sample (median ρ̂ is exactly 0
-    across the group), not an error: no ambient signal means there is
-    nothing to expand or shrink, so the scale is the identity, 1.0 -- the
-    executed dose stays 0 either way (``executed_rho = selected_rho *
-    scale`` with ``selected_rho`` already 0). Only non-finite ``q`` (NaN/
-    inf, an upstream data problem) still raises.
-
-    Shrink is blended out as ``hat_rho → 0``: ``w = clip(hat_rho /
-    Q_SCALE_LOW_RHO, 0, 1)``, executed ``(1-w) + w s(q)``. Expand
-    (``s(q) >= 1``) is unchanged. High ρ̂ (Cargnelli) keeps the curve.
-    """
+    """Executed scale is 1. Raises if ``q`` or ``hat_rho`` is not finite."""
     if not np.isfinite(hat_rho):
         raise ValueError(f"hat_rho must be finite, got {hat_rho!r}")
-    s = _q_curve_scale(q)
-    if s >= 1.0:
-        return s
-    w = float(np.clip(hat_rho / Q_SCALE_LOW_RHO, 0.0, 1.0))
-    return float((1.0 - w) + w * s)
+    if not np.isfinite(q):
+        raise ValueError(f"q must be finite, got {q!r}")
+    return 1.0
 
 
 def _unexpressed_mask(
@@ -168,7 +135,7 @@ def _unexpressed_mask(
     expected: np.ndarray,
     n_cells_t: int,
     *,
-    max_type_mean: float,
+    max_type_mean: float | None,
     noise_k: float = NOISE_K,
     margin_sd: np.ndarray | None = None,
     dominant_exclusion_applied: bool = False,
@@ -186,14 +153,36 @@ def _unexpressed_mask(
             "margin_sd requires dominant_exclusion_applied=True; empirical "
             "variance is unsafe without excluding dominant native genes"
         )
+    floor = _expression_floor(n_cells_t, max_type_mean)
     if n_cells_t <= 0:
-        return mean <= max_type_mean
+        return mean <= floor
     if margin_sd is not None:
         margin = noise_k * margin_sd / np.sqrt(n_cells_t)
     else:
         margin = noise_k * np.sqrt(np.maximum(expected, 0.0) / n_cells_t)
-    ceiling = np.maximum(max_type_mean, expected + margin)
+    ceiling = np.maximum(floor, expected + margin)
     return mean <= ceiling
+
+
+def _mean_compatible_with_type_rho(
+    mean: np.ndarray,
+    expected_rho1: np.ndarray,
+    n_cells: int,
+    rho_t: float,
+    *,
+    noise_k: float = NOISE_K,
+) -> np.ndarray:
+    """True where the type mean is compatible with soup at this type's ρ.
+
+    ``expected_rho1`` is n̄χ (the ρ=1 ceiling). True soup sits at ρ_t · n̄χ;
+    the Poisson margin matches ``_unexpressed_mask``.
+    """
+    expected_soup = float(max(rho_t, 0.0)) * np.asarray(expected_rho1, dtype=np.float64)
+    mean = np.asarray(mean, dtype=np.float64)
+    if n_cells <= 0:
+        return mean <= 0.0
+    margin = noise_k * np.sqrt(np.maximum(expected_soup, 0.0) / n_cells)
+    return mean <= expected_soup + margin
 
 
 def _soup_u_mask(
@@ -202,45 +191,90 @@ def _soup_u_mask(
     n_cells: int,
     n_bar: float,
     *,
-    max_type_mean: float,
+    max_type_mean: float | None,
     min_chi: float,
     native_everywhere: np.ndarray,
     apply_rt_and_collision: bool,
+    rho_t: float | None = None,
 ) -> np.ndarray:
     """Unexpressed ∩ χ-supported genes. Same ceiling as dose U evidence.
 
-    ``apply_rt_and_collision`` adds subtract's mid-ceiling / abundance
-    guards so extra-clear does not wipe housekeeping. Dose MLE evidence
-    omits those guards (``False``).
+    ``apply_rt_and_collision`` adds ceiling/abundance guards and a
+    type-ρ compatibility test. Dose MLE omits those (``False``).
     """
     expected = np.asarray(chi, dtype=np.float64) * float(n_bar)
     u = _unexpressed_mask(mean, expected, n_cells, max_type_mean=max_type_mean)
     u = u & ~np.asarray(native_everywhere, dtype=bool) & (chi >= min_chi)
     if apply_rt_and_collision and n_bar > 0:
+        if rho_t is None:
+            raise ValueError("rho_t is required when apply_rt_and_collision=True")
         r_t = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
-        u = u & (r_t < SOUP_ONLY_MAX_RT)
+        u = u & _mean_compatible_with_type_rho(mean, expected, n_cells, rho_t)
         u = u & ~((mean > U_MAX_LIBRARY_FRAC * n_bar) & (r_t > 0.5))
         u = u & ~(r_t > 0.85)
     return u
 
 
-def _top_chi_indices(chi: np.ndarray, candidates: np.ndarray, top_n: int) -> np.ndarray:
-    """Return top χ candidates, including every tie at the boundary."""
+def _top_chi_indices(chi: np.ndarray, candidates: np.ndarray, top_n: int | None) -> np.ndarray:
+    """Return top χ candidates, including every tie at the boundary.
+
+    ``top_n is None`` uses this sample's χ Lorenz-knee count.
+    """
     candidates = np.asarray(candidates, dtype=np.int64)
-    if candidates.size <= top_n:
+    n = _chi_prefix_n(chi) if top_n is None else int(top_n)
+    if n < 1:
+        raise ValueError("top_n must be at least 1")
+    if candidates.size <= n:
         return candidates
     values = chi[candidates]
-    cutoff = np.partition(values, values.size - top_n)[values.size - top_n]
+    cutoff = np.partition(values, values.size - n)[values.size - n]
     return candidates[values >= cutoff]
 
 
+def _calibrate_ratio_quantile(x, n, chi, empty_idx: np.ndarray, gidx: np.ndarray) -> float:
+    """Choose the y/(nχ) quantile so empty droplets have median ρ̂ ≈ 1."""
+    if empty_idx.size < MIN_VALID or gidx.size == 0:
+        return DOSE_RATIO_QUANTILE
+
+    def med_rho(q: float) -> float:
+        rho, nv = _quantile_rho_on_genes(x, n, chi, empty_idx, gidx, quantile=q)
+        ok = np.isfinite(rho) & (nv >= 1)
+        if not ok.any():
+            return np.nan
+        return float(np.median(rho[ok]))
+
+    lo, hi = 0.0, 1.0
+    for _ in range(24):
+        mid = 0.5 * (lo + hi)
+        m = med_rho(mid)
+        if not np.isfinite(m) or m < 1.0:
+            lo = mid
+        else:
+            hi = mid
+    return float(0.5 * (lo + hi))
+
+
 def _rho_from_chi(
-    x, n, chi, cell_idx, *, top_n: int, min_chi: float, quantile: float, min_valid: int = MIN_VALID
+    x,
+    n,
+    chi,
+    cell_idx,
+    *,
+    top_n: int | None,
+    min_chi: float,
+    quantile: float | None,
+    min_valid: int = MIN_VALID,
+    empty_idx: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Quantile floor and its per-cell number of valid soup genes."""
     candidates = np.flatnonzero(chi >= min_chi)
     gidx = _top_chi_indices(chi, candidates, top_n)
-    rho, n_valid = _quantile_rho_on_genes(x, n, chi, cell_idx, gidx, quantile=quantile)
+    q = quantile
+    if q is None:
+        q = _calibrate_ratio_quantile(
+            x, n, chi, np.asarray([] if empty_idx is None else empty_idx), gidx
+        )
+    rho, n_valid = _quantile_rho_on_genes(x, n, chi, cell_idx, gidx, quantile=q)
     rho[n_valid < min_valid] = 0.0
     return np.nan_to_num(rho, nan=0.0), n_valid
 
@@ -248,8 +282,8 @@ def _rho_from_chi(
 def _dose_quantile_from_chi(
     adata: AnnData,
     *,
-    quantile: float = 0.15,
-    top_n: int = 100,
+    quantile: float | None = None,
+    top_n: int | None = None,
     min_chi: float = 1e-6,
     droplet_key: str = DROPLET_KEY,
     cell_label: str = "cell",
@@ -268,6 +302,7 @@ def _dose_quantile_from_chi(
         for s in pd.unique(samples):
             chi = _chi_for_obs(adata, sample_key=sample_key, sample_name=s)
             idx = np.flatnonzero(is_cell & (samples == s))
+            empty_idx = np.flatnonzero(~is_cell & (samples == s))
             rho[idx], _ = _rho_from_chi(
                 x,
                 n,
@@ -277,10 +312,12 @@ def _dose_quantile_from_chi(
                 min_chi=min_chi,
                 quantile=quantile,
                 min_valid=min_valid,
+                empty_idx=empty_idx,
             )
     else:
         chi = _chi_vector(adata)
         idx = np.flatnonzero(is_cell)
+        empty_idx = np.flatnonzero(~is_cell)
         rho[idx], _ = _rho_from_chi(
             x,
             n,
@@ -290,6 +327,7 @@ def _dose_quantile_from_chi(
             min_chi=min_chi,
             quantile=quantile,
             min_valid=min_valid,
+            empty_idx=empty_idx,
         )
     dose = rho * n
     adata.obs[DOSE_KEY] = dose
@@ -316,15 +354,13 @@ def _native_everywhere_mask(
     types: np.ndarray,
     mask: np.ndarray,
     *,
-    max_type_mean: float,
+    max_type_mean: float | None,
 ) -> np.ndarray:
     """Drop genes that look native in every type, not true soup.
 
     Empty-droplet soup sits at or below ``n̄ χ`` in every type and is kept.
-    Housekeeping exceeds that ceiling in every type. Genes that sit on the
-    ceiling in every type *and* take a large library fraction (MALAT1-like
-    collision) stay unidentifiable and are also dropped. Cross-type fold
-    is not used: true soup is uniform by construction.
+    Housekeeping exceeds that ceiling in every type. Genes on the ceiling
+    in every type that also take a large library fraction are dropped.
     """
     above = []
     collide = []
@@ -340,8 +376,6 @@ def _native_everywhere_mask(
         unexp = _unexpressed_mask(mean, expected, idx.size, max_type_mean=max_type_mean)
         above.append(~unexp)
         r_t = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
-        # r_t near 1 is the ρ=1 ceiling (housekeeping / MALAT1). True soup
-        # has r_t ≈ ρ, which is below this even when contamination is high.
         collide.append((n_bar > 0) & (mean > U_MAX_LIBRARY_FRAC * n_bar) & (r_t > 0.85))
     if len(above) < 2:
         return np.zeros(x.shape[1], dtype=bool)
@@ -373,13 +407,14 @@ def estimate_dose(
     adata: AnnData,
     *,
     type_key: str | None = None,
-    quantile: float = 0.15,
-    top_n: int = 100,
+    quantile: float | None = None,
+    top_n: int | None = None,
     min_chi: float = 1e-6,
-    max_type_mean: float = 0.05,
-    soup_quantile: float = 0.75,
+    max_type_mean: float | None = None,
+    soup_quantile: float | None = None,
     min_genes: int = MIN_GENES,
     min_valid: int = MIN_VALID,
+    evidence_mode: str = "positive_genes",
     droplet_key: str | None = None,
     cell_label: str = "cell",
     layer: str | None = None,
@@ -387,32 +422,33 @@ def estimate_dose(
 ) -> np.ndarray:
     """Per-cell absolute ambient dose ``d_c = ρ_c · n_c``.
 
-    ``type_key is None``: quantile floor on top soup genes (ablation).
-    ``type_key`` set: unexpressed ∩ soup genes, dropping genes that look
-    native (or ceiling-collision) in every type, then shrink log ρ within
-    sample. A sample with fewer than two types uses the untyped quantile
-    floor: the type-aware U set is not identified from one contaminated
-    mean (see ``_native_everywhere_mask``).
+    ``type_key is None``: quantile floor on top soup genes.
+    ``type_key`` set: unexpressed soup genes, dropping genes that look
+    native in every type, then shrink log ρ within the sample. Fewer than
+    two types uses the untyped quantile floor.
 
-    Dose estimation deliberately does not use cross-type gene protection;
-    local protection decisions must not perturb the shared per-cell dose.
+    Dose does not use cross-type gene protection.
+    ``evidence_mode="exposure"`` shrinks with ``n_c · sum(χ_U)`` instead of
+    the count of positive U genes.
     """
     _reject_view(adata, "estimate_dose")
     _require_raw_integer_counts(adata, layer=layer, fname="estimate_dose")
     _validate_chi_provenance(adata, sample_key=sample_key, layer=layer)
-    if not 0 <= quantile <= 1:
+    if quantile is not None and not 0 <= quantile <= 1:
         raise ValueError("quantile must be between 0 and 1")
-    if not 0 <= soup_quantile <= 1:
+    if soup_quantile is not None and not 0 <= soup_quantile <= 1:
         raise ValueError("soup_quantile must be between 0 and 1")
-    if top_n < 1:
+    if top_n is not None and top_n < 1:
         raise ValueError("top_n must be at least 1")
     if min_genes < 1:
         raise ValueError("min_genes must be at least 1")
     if min_valid < 1:
         raise ValueError("min_valid must be at least 1")
+    if evidence_mode not in {"positive_genes", "exposure"}:
+        raise ValueError("evidence_mode must be 'positive_genes' or 'exposure'")
     if min_chi < 0:
         raise ValueError("min_chi must be nonnegative")
-    if max_type_mean < 0:
+    if max_type_mean is not None and max_type_mean < 0:
         raise ValueError("max_type_mean must be nonnegative")
     if type_key is not None and type_key not in adata.obs.columns:
         raise KeyError(f"{type_key!r} missing on obs")
@@ -468,6 +504,7 @@ def estimate_dose(
 
     rho_raw = np.full(adata.n_obs, np.nan, dtype=np.float64)
     n_valid = np.zeros(adata.n_obs, dtype=np.int64)
+    evidence_exposure = np.zeros(adata.n_obs, dtype=np.float64)
     fallback = np.zeros(adata.n_obs, dtype=bool)
     one_type = np.zeros(adata.n_obs, dtype=bool)
 
@@ -496,6 +533,7 @@ def estimate_dose(
         # One type: U is "genes this library doesn't express," which is soup
         # plus noise. The type mean already contains the contamination, so the
         # type-aware floor goes to ρ≈1. Same estimator as type_key=None.
+        empty_idx = np.flatnonzero((sample_of == s) & ~is_cell)
         if len(sample_types) < 2:
             idx = np.flatnonzero(in_s)
             if idx.size:
@@ -508,6 +546,7 @@ def estimate_dose(
                     min_chi=min_chi,
                     quantile=quantile,
                     min_valid=min_valid,
+                    empty_idx=empty_idx,
                 )
                 fallback[idx] = True
                 one_type[idx] = True
@@ -537,29 +576,30 @@ def estimate_dose(
             )
             cand = np.flatnonzero(u_t)
             fb = cand.size < min_genes
-            if fb:
+            if fb and soup_quantile is not None:
                 soup = (
                     (chi >= np.quantile(chi, soup_quantile)) & (chi >= min_chi) & ~native_everywhere
                 )
-                gidx = np.flatnonzero(soup)
+                gidx = _top_chi_indices(chi, np.flatnonzero(soup), top_n)
             else:
-                gidx = cand
-            gidx = _top_chi_indices(chi, gidx, top_n)
-            # 15% quantile is SoupX protection for a contaminated gene set.
-            # On a clean U_t it sits well below E[y/(nχ)]=ρ. Poisson MLE
-            # uses zeros and matches true d·χ on barnyard.
+                gidx = _top_chi_indices(chi, cand, top_n)
             if fb:
+                q = quantile
+                if q is None:
+                    q = _calibrate_ratio_quantile(x, n, chi, empty_idx, gidx)
                 rho_c, nv = _quantile_rho_on_genes(
                     x,
                     n,
                     chi,
                     idx,
                     gidx,
-                    quantile=quantile,
+                    quantile=q,
                 )
             else:
                 rho_c, nv = _mle_rho_on_genes(x, n, chi, idx, gidx)
-            rho_c[nv < min_valid] = np.nan
+                evidence_exposure[idx] = n[idx] * float(chi[gidx].sum())
+            if evidence_mode == "positive_genes":
+                rho_c[nv < min_valid] = np.nan
             rho_raw[idx] = rho_c
             n_valid[idx] = nv
             fallback[idx] = fb
@@ -603,7 +643,15 @@ def estimate_dose(
             continue
         theta = np.log(rho_raw[fin] + 1e-8)
         mu = float(np.median(theta))
-        w = n_valid[fin] / (n_valid[fin] + SHRINK_K)
+        if evidence_mode == "exposure":
+            evidence = evidence_exposure[fin]
+        else:
+            evidence = n_valid[fin].astype(np.float64)
+        pos = evidence > 0
+        k_shrink = float(np.median(evidence[pos])) if pos.any() else float(SHRINK_K)
+        if k_shrink <= 0:
+            k_shrink = float(SHRINK_K)
+        w = evidence / (evidence + k_shrink)
         shrink_w[fin] = w
         rho[fin] = np.clip(np.exp(w * theta + (1.0 - w) * mu), 0.0, 1.0)
         if nan.size:
@@ -626,6 +674,7 @@ def estimate_dose(
             "rho_median": float(np.median(rho[idx_all])),
             "frac_fallback": float(fallback[idx_all].mean()),
             "mean_shrink_w": float(shrink_w[idx_all].mean()),
+            "shrink_k": k_shrink,
             "mean_n_dose_genes": float(n_valid[idx_all].mean()),
             "frac_rho_gt_095_small_n": frac_hi,
         }
@@ -647,387 +696,14 @@ def estimate_dose(
         diag_samples[sample_id]["sample"] = "" if s is None else str(s)
         diag_samples[sample_id]["sample_is_global"] = s is None
     uns = dict(adata.uns.get("ambidose", {}))
-    uns["dose"] = {"method": "typed", "samples": diag_samples}
+    uns["dose"] = {
+        "method": "typed",
+        "evidence_mode": evidence_mode,
+        "samples": diag_samples,
+    }
     uns["dose_type_key"] = type_key
     uns["dose_sample_key"] = sample_key
     uns["dose_provenance"] = _dose_provenance(
-        type_key=type_key,
-        sample_key=sample_key,
-        layer=layer,
-        droplet_key=droplet_key,
-        cell_label=cell_label,
-    )
-    adata.uns["ambidose"] = uns
-    return dose
-
-
-def _tv_distance(left: np.ndarray, right: np.ndarray) -> float:
-    return float(0.5 * np.abs(left - right).sum())
-
-
-def _simplex(values: np.ndarray, pseudocount: float) -> np.ndarray:
-    if pseudocount <= 0:
-        raise ValueError("pseudocount must be positive")
-    profile = np.asarray(values, dtype=np.float64) + pseudocount
-    if not np.isfinite(profile).all() or np.any(profile < 0):
-        raise ValueError("mixture profile must be finite and nonnegative")
-    total = profile.sum()
-    if total <= 0:
-        raise ValueError("mixture profile has non-positive mass")
-    return profile / total
-
-
-def _mixture_responsibility(coo, local_rho, native, ambient) -> np.ndarray:
-    r = local_rho[coo.row]
-    ambient_mass = r * ambient[coo.col]
-    native_mass = (1.0 - r) * native[coo.col]
-    denom = ambient_mass + native_mass
-    return np.divide(ambient_mass, denom, out=np.zeros_like(ambient_mass), where=denom > 0)
-
-
-def _two_component_mixture_em(
-    *,
-    coo,
-    n_cells: np.ndarray,
-    n_vars: int,
-    native: np.ndarray,
-    ambient: np.ndarray,
-    max_iter: int,
-    convergence: float,
-    initial_rho: float,
-    pseudocount: float,
-) -> tuple[np.ndarray, np.ndarray, int, bool, np.ndarray]:
-    """Fit per-cell ρ with a locked ambient profile and an updating native profile."""
-    local_rho = np.full(n_cells.size, initial_rho, dtype=np.float64)
-    native = np.asarray(native, dtype=np.float64).copy()
-    ambient = np.asarray(ambient, dtype=np.float64)
-    did_converge = False
-    n_iter = 0
-    responsibility = np.zeros(coo.data.shape[0], dtype=np.float64)
-    for step in range(1, max_iter + 1):
-        n_iter = step
-        responsibility = _mixture_responsibility(coo, local_rho, native, ambient)
-        ambient_by_cell = np.bincount(
-            coo.row, weights=coo.data * responsibility, minlength=n_cells.size
-        )
-        updated_rho = np.clip(
-            np.divide(
-                ambient_by_cell, n_cells, out=np.zeros_like(ambient_by_cell), where=n_cells > 0
-            ),
-            0.0,
-            1.0,
-        )
-        native_counts = np.bincount(
-            coo.col, weights=coo.data * (1.0 - responsibility), minlength=n_vars
-        )
-        updated_native = _simplex(native_counts, pseudocount)
-        rho_delta = float(np.max(np.abs(updated_rho - local_rho)))
-        native_delta = float(0.5 * np.abs(updated_native - native).sum())
-        local_rho = updated_rho
-        native = updated_native
-        if max(rho_delta, native_delta) < convergence:
-            did_converge = True
-            break
-    responsibility = _mixture_responsibility(coo, local_rho, native, ambient)
-    inferred = np.zeros(n_vars, dtype=np.float64)
-    ambient_gene_counts = np.bincount(coo.col, weights=coo.data * responsibility, minlength=n_vars)
-    ambient_total = ambient_gene_counts.sum()
-    if ambient_total > 0:
-        inferred = ambient_gene_counts / ambient_total
-    return local_rho, native, n_iter, did_converge, inferred
-
-
-def _mixture_loglik(
-    coo, n_cells: np.ndarray, local_rho: np.ndarray, native: np.ndarray, ambient: np.ndarray
-) -> np.ndarray:
-    """Per-cell log-likelihood of a fitted two-component mixture's own data."""
-    r = local_rho[coo.row]
-    mix = r * ambient[coo.col] + (1.0 - r) * native[coo.col]
-    return np.bincount(
-        coo.row,
-        weights=coo.data * np.log(np.maximum(mix, 1e-300)),
-        minlength=n_cells.size,
-    )
-
-
-def _type_residual_score(
-    adata: AnnData,
-    *,
-    is_cell: np.ndarray,
-    type_key: str,
-    sample_key: str | None,
-    layer: str | None,
-    max_iter: int = 500,
-    convergence: float = 1e-3,
-    pseudocount: float = 1e-8,
-) -> np.ndarray:
-    """Per-cell heterotypic-doublet-vs-soup log-likelihood-ratio diagnostic.
-
-    Fits two locked-ambient two-component mixtures per cell: the native
-    profile is always this cell's own coarse type; the ambient side is
-    either the leave-one-type pooled profile of every *other* coarse type
-    in the same sample (doublet hypothesis: excess mass is a second cell
-    program), or empty-droplet chi (soup hypothesis: excess mass is
-    ambient-shaped). The returned score is the per-cell log-likelihood
-    difference, other-type fit minus chi fit: positive leans doublet-
-    shaped, negative leans soup-shaped. It is diagnostic only -- it does
-    not feed rho/dose, and nothing here relabels droplets. NaN where chi
-    or a second type is unavailable for that cell's sample (fewer than two
-    coarse types, or no empty-droplet chi estimated).
-    """
-    x = _as_csr(adata.layers[layer] if layer is not None else adata.X)
-    n = np.asarray(x.sum(axis=1)).ravel().astype(np.float64)
-    types = _validated_type_values(adata, type_key).to_numpy()
-    samples = _sample_names(adata, sample_key)
-    groups = [None] if samples is None else list(pd.unique(samples))
-    sample_of = np.array([None] * adata.n_obs, dtype=object) if samples is None else samples
-    score = np.full(adata.n_obs, np.nan, dtype=np.float64)
-    for sample in groups:
-        chi = None
-        if CHI_KEY in adata.var.columns or CHI_KEY in adata.uns:
-            chi = _chi_for_obs(
-                adata, sample_key=sample_key if sample is not None else None, sample_name=sample
-            )
-        if chi is None:
-            continue
-        in_sample = is_cell & (sample_of == sample)
-        sample_types = [t for t in pd.unique(types[in_sample]) if t not in EMPTY_TYPES]
-        if len(sample_types) < 2:
-            continue
-        type_sums = {
-            t: np.asarray(x[in_sample & (types == t)].sum(axis=0)).ravel().astype(np.float64)
-            for t in sample_types
-        }
-        type_profiles = {t: _simplex(type_sums[t], pseudocount) for t in sample_types}
-        total_profile = np.sum(list(type_sums.values()), axis=0)
-        chi_ambient = _simplex(chi, pseudocount)
-        for cell_type in sample_types:
-            idx = np.flatnonzero(in_sample & (types == cell_type))
-            idx = idx[n[idx] > 0]
-            if idx.size == 0:
-                continue
-            coo = x[idx].tocoo()
-            native_init = type_profiles[cell_type]
-            other_ambient = _simplex(total_profile - type_sums[cell_type], pseudocount)
-            kw = {
-                "coo": coo,
-                "n_cells": n[idx],
-                "n_vars": adata.n_vars,
-                "native": native_init,
-                "max_iter": max_iter,
-                "convergence": convergence,
-                "initial_rho": 0.5,
-                "pseudocount": pseudocount,
-            }
-            other_fit = _two_component_mixture_em(ambient=other_ambient, **kw)
-            chi_fit = _two_component_mixture_em(ambient=chi_ambient, **kw)
-            ll_other = _mixture_loglik(coo, n[idx], other_fit[0], other_fit[1], other_ambient)
-            ll_chi = _mixture_loglik(coo, n[idx], chi_fit[0], chi_fit[1], chi_ambient)
-            score[idx] = ll_other - ll_chi
-    return score
-
-
-def estimate_dose_mixture(
-    adata: AnnData,
-    *,
-    type_key: str,
-    max_iter: int = 500,
-    convergence: float = 1e-3,
-    initial_rho: float = 0.5,
-    pseudocount: float = 1e-8,
-    droplet_key: str | None = None,
-    cell_label: str = "cell",
-    layer: str | None = None,
-    sample_key: str | None = None,
-    fallback_quantile: float = 0.15,
-    fallback_top_n: int = 100,
-    fallback_min_chi: float = 1e-6,
-    fallback_min_valid: int = MIN_VALID,
-) -> np.ndarray:
-    """Estimate dose from native and contamination profiles.
-
-    One mixture fit per type, on an ambient reference derived from
-    empty-droplet χ whenever χ is available:
-
-    - NNLS-regress χ against the sample's type-profile matrix
-      (χ ≈ Σ_t π_t · profile_t, π ≥ 0, renormalized to sum to 1) to
-      estimate each type's own share of what actually shows up in empty
-      droplets.
-    - That type's ambient reference is χ with its own estimated share
-      subtracted back out: ``(χ - π_t·profile_t) / (1 - π_t)``, clipped to
-      stay nonnegative (π_t capped at 0.95).
-
-    This replaces the leave-one-type ("cell", DecontX-style) ambient this
-    function used before 2026-09-07: giving every type in a sample the
-    same complement-of-everyone-else profile makes each type's fit see a
-    structurally different contamination hypothesis, which introduces
-    type-linked bias into ρ that has no counterpart in true injected
-    contamination. Estimating each type's actual self-contamination share
-    from χ directly, instead of assuming it, removes most of that bias
-    while improving native retention and, on both barnyard datasets,
-    specificity/precision at essentially unchanged sensitivity. Full
-    rationale, the leave-one-type counterfactual, and the before/after
-    evaluation across all manuscript datasets are in
-    docs/fig1_design_gap_audit_20260907.md and the 2026-09-07 DEVLOG
-    entries ("gap-3 fix merged" and the counterfactual confirmation above
-    it).
-
-    A sample with fewer than two types has no type-profile matrix to
-    regress against: the χ mixture EM then fits a contaminated type mean
-    against χ and reports ρ≈1. Those samples use the untyped
-    quantile-floor on χ instead (``fallback_*`` controls that floor --
-    same knobs and defaults as ``estimate_dose()``'s own untyped path,
-    exposed explicitly here rather than hardcoded, so the two don't
-    silently drift apart). Empty droplets remain the independent
-    composition used by ``subtract()``.
-    """
-    _reject_view(adata, "estimate_dose_mixture")
-    _require_raw_integer_counts(adata, layer=layer, fname="estimate_dose_mixture")
-    _validate_chi_provenance(adata, sample_key=sample_key, layer=layer)
-    if type_key not in adata.obs.columns:
-        raise KeyError(f"{type_key!r} missing on obs")
-    if max_iter < 1:
-        raise ValueError("max_iter must be >= 1")
-    if convergence <= 0:
-        raise ValueError("convergence must be positive")
-    if pseudocount <= 0:
-        raise ValueError("pseudocount must be positive")
-    if not 0 < initial_rho < 1:
-        raise ValueError("initial_rho must be strictly between 0 and 1")
-    if not 0 <= fallback_quantile <= 1:
-        raise ValueError("fallback_quantile must be between 0 and 1")
-    if fallback_top_n < 1:
-        raise ValueError("fallback_top_n must be at least 1")
-    if fallback_min_valid < 1:
-        raise ValueError("fallback_min_valid must be at least 1")
-    if fallback_min_chi < 0:
-        raise ValueError("fallback_min_chi must be nonnegative")
-    x = _as_csr(adata.layers[layer] if layer is not None else adata.X)
-    n = np.asarray(x.sum(axis=1)).ravel().astype(np.float64)
-    nnz_per_cell = np.diff(x.indptr)
-    is_cell = _resolve_cell_mask(adata, droplet_key, cell_label)
-    types = _validated_type_values(adata, type_key).to_numpy()
-    samples = _sample_names(adata, sample_key)
-    groups = [None] if samples is None else list(pd.unique(samples))
-    sample_of = np.array([None] * adata.n_obs, dtype=object) if samples is None else samples
-    rho = np.zeros(adata.n_obs, dtype=np.float64)
-    rho_cell = np.zeros(adata.n_obs, dtype=np.float64)
-    rho_empty = np.full(adata.n_obs, np.nan, dtype=np.float64)
-    iterations = np.zeros(adata.n_obs, dtype=np.int64)
-    converged = pd.array([pd.NA] * adata.n_obs, dtype="boolean")
-    profile_tv = np.zeros(adata.n_obs, dtype=np.float64)
-    empty_tv = np.full(adata.n_obs, np.nan, dtype=np.float64)
-    profile = np.full(adata.n_obs, "not_evaluated", dtype=object)
-    status = np.full(adata.n_obs, "not_evaluated", dtype=object)
-    n_genes_ev = np.zeros(adata.n_obs, dtype=np.int64)
-    for sample in groups:
-        chi = None
-        if CHI_KEY in adata.var.columns or CHI_KEY in adata.uns:
-            chi = _chi_for_obs(
-                adata, sample_key=sample_key if sample is not None else None, sample_name=sample
-            )
-        in_sample = is_cell & (sample_of == sample)
-        sample_types = [t for t in pd.unique(types[in_sample]) if t not in EMPTY_TYPES]
-        type_sums = {
-            t: np.asarray(x[in_sample & (types == t)].sum(axis=0)).ravel().astype(np.float64)
-            for t in sample_types
-        }
-        type_profiles = {t: _simplex(type_sums[t], pseudocount) for t in sample_types}
-        total_profile = (
-            np.sum(list(type_sums.values()), axis=0)
-            if sample_types
-            else np.zeros(adata.n_vars, dtype=np.float64)
-        )
-        empty_ambient = _simplex(chi, pseudocount) if chi is not None else None
-        if len(sample_types) < 2:
-            idx = np.flatnonzero(in_sample)
-            idx = idx[n[idx] > 0]
-            if idx.size == 0:
-                continue
-            if chi is None:
-                raise ValueError(
-                    "empty-droplet χ is required for a single-type library "
-                    "(leave-one-type ambient is empty); run estimate_chi first"
-                )
-            rho_q, n_valid_q = _rho_from_chi(
-                x,
-                n,
-                chi,
-                idx,
-                top_n=fallback_top_n,
-                min_chi=fallback_min_chi,
-                quantile=fallback_quantile,
-                min_valid=fallback_min_valid,
-            )
-            rho[idx] = rho_q
-            rho_empty[idx] = rho_q
-            profile[idx] = "empty"
-            status[idx] = "quantile_fallback"
-            n_genes_ev[idx] = n_valid_q
-            continue
-        pi: dict[object, float] = {}
-        if empty_ambient is not None:
-            basis = np.column_stack([type_profiles[t] for t in sample_types])
-            coef, _resid = nnls(basis, empty_ambient)
-            total_coef = float(coef.sum())
-            if total_coef > 0:
-                coef = coef / total_coef
-            pi = {t: float(coef[j]) for j, t in enumerate(sample_types)}
-        for cell_type in sample_types:
-            idx = np.flatnonzero(in_sample & (types == cell_type))
-            idx = idx[n[idx] > 0]
-            if idx.size == 0:
-                continue
-            coo = x[idx].tocoo()
-            native_init = type_profiles[cell_type]
-            if empty_ambient is not None:
-                pi_t = min(pi.get(cell_type, 0.0), 0.95)
-                self_removed = empty_ambient - pi_t * type_profiles[cell_type]
-                ambient_t = _simplex(np.clip(self_removed, 0.0, None), pseudocount)
-                selected_profile = "chi_deconv"
-            else:
-                ambient_t = _simplex(total_profile - type_sums[cell_type], pseudocount)
-                pi_t = float("nan")
-                selected_profile = "cell"
-            fit = _two_component_mixture_em(
-                coo=coo,
-                n_cells=n[idx],
-                n_vars=adata.n_vars,
-                native=native_init,
-                ambient=ambient_t,
-                max_iter=max_iter,
-                convergence=convergence,
-                initial_rho=initial_rho,
-                pseudocount=pseudocount,
-            )
-            selected_rho, selected_native, n_iter, did_converge, _inferred = fit
-            rho_cell[idx] = selected_rho
-            rho_empty[idx] = selected_rho
-            rho[idx] = selected_rho
-            if empty_ambient is not None:
-                empty_tv[idx] = _tv_distance(selected_native, empty_ambient)
-            iterations[idx] = n_iter
-            converged[idx] = did_converge
-            status[idx] = "fitted_converged" if did_converge else "fitted_unconverged"
-            profile_tv[idx] = _tv_distance(selected_native, ambient_t)
-            profile[idx] = selected_profile
-            n_genes_ev[idx] = nnz_per_cell[idx]
-    dose = rho * n
-    adata.obs["ambidose_dose_mixture"] = dose
-    adata.obs["ambidose_rho_mixture"] = rho
-    adata.obs["ambidose_dose_mixture_cell"] = rho_cell * n
-    adata.obs["ambidose_rho_mixture_cell"] = rho_cell
-    adata.obs["ambidose_dose_mixture_empty"] = rho_empty * n
-    adata.obs["ambidose_rho_mixture_empty"] = rho_empty
-    adata.obs["ambidose_mixture_profile"] = pd.Categorical(profile)
-    adata.obs["ambidose_mixture_status"] = pd.Categorical(status)
-    adata.obs["ambidose_mixture_n_genes"] = n_genes_ev
-    adata.obs["ambidose_mixture_iterations"] = iterations
-    adata.obs["ambidose_mixture_converged"] = converged
-    adata.obs["ambidose_mixture_profile_tv"] = profile_tv
-    adata.obs["ambidose_mixture_empty_tv"] = empty_tv
-    uns = dict(adata.uns.get("ambidose", {}))
-    uns["mixture_provenance"] = _dose_provenance(
         type_key=type_key,
         sample_key=sample_key,
         layer=layer,
@@ -1043,17 +719,22 @@ def diagnose_dose_disagreement(
     *,
     fixed_dose: np.ndarray | None = None,
     mixture_dose: np.ndarray | None = None,
-    fold_threshold: float = 2.0,
-    rho_gap_threshold: float = 0.10,
+    fold_threshold: float | None = None,
+    rho_gap_threshold: float | None = None,
     droplet_key: str | None = None,
     cell_label: str = "cell",
     layer: str | None = None,
 ) -> dict[str, float | int]:
-    """Use fixed dose on agreement and mixture dose on large disagreement."""
+    """Use fixed dose on agreement and mixture dose on large disagreement.
+
+    Default: mixture wins when |ρ gap| exceeds Poisson sampling error of
+    the two estimates (``NOISE_K * sqrt(se_fixed² + se_mix²)``, se² = ρ/n).
+    Explicit ``fold_threshold`` / ``rho_gap_threshold`` remain for tests.
+    """
     _reject_view(adata, "diagnose_dose_disagreement")
-    if fold_threshold <= 1:
+    if fold_threshold is not None and fold_threshold <= 1:
         raise ValueError("fold_threshold must be > 1")
-    if not 0 <= rho_gap_threshold <= 1:
+    if rho_gap_threshold is not None and not 0 <= rho_gap_threshold <= 1:
         raise ValueError("rho_gap_threshold must be between 0 and 1")
     standalone = fixed_dose is not None or mixture_dose is not None
     if not standalone:
@@ -1109,9 +790,18 @@ def diagnose_dose_disagreement(
     log2_ratio = np.log2((fixed_rho + eps) / (mixture_rho + eps))
     rho_gap = np.abs(fixed_rho - mixture_rho)
     eligible = _resolve_cell_mask(adata, droplet_key, cell_label)
-    large = (
-        eligible & (np.abs(log2_ratio) >= np.log2(fold_threshold)) & (rho_gap >= rho_gap_threshold)
-    )
+    abs_l2 = np.abs(log2_ratio)
+    if fold_threshold is None and rho_gap_threshold is None:
+        se_f = np.sqrt(np.maximum(fixed_rho, 0.0) / np.maximum(n, 1.0))
+        se_m = np.sqrt(np.maximum(mixture_rho, 0.0) / np.maximum(n, 1.0))
+        gap_cut_arr = NOISE_K * np.sqrt(se_f**2 + se_m**2)
+        large = eligible & (rho_gap >= gap_cut_arr)
+        fold_cut = float("nan")
+        gap_cut = float(np.median(gap_cut_arr[eligible])) if eligible.any() else 0.0
+    else:
+        fold_cut = float(np.log2(fold_threshold)) if fold_threshold is not None else 0.0
+        gap_cut = 0.0 if rho_gap_threshold is None else float(rho_gap_threshold)
+        large = eligible & (abs_l2 >= fold_cut) & (rho_gap >= gap_cut)
     n_unconverged_blocked = 0
     if not standalone and "ambidose_mixture_status" in adata.obs:
         mixture_status = adata.obs["ambidose_mixture_status"].astype(str).to_numpy()
@@ -1137,6 +827,8 @@ def diagnose_dose_disagreement(
         "n_fixed_high": int(np.sum(direction == "fixed_high")),
         "n_mixture_high": int(np.sum(direction == "mixture_high")),
         "n_disagreement_unconverged_kept_fixed": n_unconverged_blocked,
+        "fold_cut_log2": float(fold_cut),
+        "rho_gap_cut": float(gap_cut),
     }
     diag_columns = {
         "median_fixed_n_genes_disagreement": "ambidose_n_dose_genes",
@@ -1157,6 +849,7 @@ def diagnose_dose_disagreement(
     return summary
 
 
+@_atomic_obs_uns
 def estimate_dose_adaptive(
     adata: AnnData,
     *,
@@ -1165,19 +858,19 @@ def estimate_dose_adaptive(
     cell_label: str = "cell",
     layer: str | None = None,
     sample_key: str | None = None,
-    fold_threshold: float = 2.0,
-    rho_gap_threshold: float = 0.10,
-    quantile: float = 0.15,
-    top_n: int = 100,
+    fold_threshold: float | None = None,
+    rho_gap_threshold: float | None = None,
+    quantile: float | None = None,
+    top_n: int | None = None,
     min_chi: float = 1e-6,
     min_valid: int = MIN_VALID,
+    evidence_mode: str = "exposure",
 ) -> np.ndarray:
     """Select fixed dose on agreement and mixture dose on large disagreement.
 
     Executed ``ambidose_d`` / ``ambidose_rho`` are the selected values
-    multiplied by the sample-level scale ``s(q)``, ``q = median(ρ̂) n̄ / λ_e``.
-    Shrink is blended toward 1 as median selected ρ̂ approaches 0.
-    ``ambidose_dose_selected`` remains the unscaled estimator output.
+    (scale 1). ``q = median(ρ̂) n̄ / λ_e`` is still recorded per sample.
+    ``ambidose_dose_selected`` is the same as executed dose.
     """
     estimate_dose(
         adata,
@@ -1190,6 +883,7 @@ def estimate_dose_adaptive(
         top_n=top_n,
         min_chi=min_chi,
         min_valid=min_valid,
+        evidence_mode=evidence_mode,
     )
     fixed_dose_meta = copy.deepcopy(adata.uns.get("ambidose", {}).get("dose", {}))
     estimate_dose_mixture(
@@ -1252,7 +946,9 @@ def estimate_dose_adaptive(
         hat = float(np.median(selected_rho[mask])) if mask.any() else 0.0
         n_bar = float(n[mask].mean()) if mask.any() else 0.0
         q = hat * n_bar / lam_e if n_bar > 0 else float("nan")
-        scale = q_abs_scale(q, hat_rho=hat)
+        # A valid library can contain only empty droplets after cell calling
+        # (or after refinement). There is no cell-level q to record.
+        scale = q_abs_scale(q, hat_rho=hat) if mask.any() else 1.0
         executed_rho[mask] = np.clip(selected_rho[mask] * scale, 0.0, 1.0)
         selected_samples[sample_id] = {
             "sample": "" if sample is None else str(sample),
@@ -1270,17 +966,21 @@ def estimate_dose_adaptive(
     adata.obs[RHO_KEY] = executed_rho
     uns = dict(adata.uns.get("ambidose", {}))
     uns["dose"] = {
+        "evidence_mode": evidence_mode,
         "fixed": fixed_dose_meta,
         "selected": {"samples": selected_samples},
         "selection": selection_summary,
         "samples": selected_samples,
         "q_scale": {
-            "T": Q_SCALE_T,
-            "expand_cap": Q_SCALE_EXPAND_CAP,
-            "shrink_floor": Q_SCALE_SHRINK_FLOOR,
-            "low_rho": Q_SCALE_LOW_RHO,
-            "low_rho_blend": True,
+            "method": "identity",
         },
     }
     adata.uns["ambidose"] = uns
     return executed
+
+
+def estimate_dose_mixture(*args, **kwargs):
+    """Wrapper so tests can patch ``ambidose._dose.estimate_dose_mixture``."""
+    from ._mixture import estimate_dose_mixture as _impl
+
+    return _impl(*args, **kwargs)

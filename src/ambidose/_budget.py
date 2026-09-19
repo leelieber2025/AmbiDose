@@ -8,34 +8,15 @@ from scipy import sparse
 
 from ._shared import MIN_TYPE_CELLS
 
-# Blend weight for dose-enrichment scaling of unowned rank-1 and soupOnly
-# takes. 0 keeps the pooled take; 1 replaces it with take × max(Pearson(y/n, ρ), 0).
+# Blend of pooled take vs take × max(Pearson(y/n, ρ), 0). 0 = pooled.
 ENRICH_STRENGTH = 0.1
-# Pre-enrich take/capacity at or above this is type-pooled; below it, rank-1
-# take is spent inside each cell so fractional χ-budget is not taken from
-# other cells of the same type.
+# At this take/capacity, rank-1 stays type-pooled; below it, per cell.
 SAT_FRAC = 1.0
-# Physical: leftover cannot land above the ρ=1 ceiling (r_t > 1).
-# Dataset cutoffs (0.7, 3 ρ_t) are not used. Ambient-consistency weights
-# use a Poisson score of r_t against this type's ρ_t (see _realloc_unspent_rank1).
+# Leftover cannot land above the ρ=1 ceiling (r_t > 1).
 REALLOC_RT_MAX = 1.0
-# Unbounded soupOnly extra-clear covers this χ-mass prefix of U genes.
-# Ownership single-winner stays at CHI_MASS_SINGLE_WINNER (0.15). Wider
-# extra-clear recovers soup-dominant markers (e.g. globin) that sit
-# outside the 15% prefix and were remaining-d_c capped.
-SOUP_ONLY_CHI_MASS = 0.8
-# Promoted in 0.3.13: gate _type_masks's abundant_collision/ceiling exception
-# (protects a gene whose type mean approaches the ρ=1 ambient ceiling) on
-# cross-type specificity via _ownership._ceiling_cross_type_gate (median-of-
-# others background comparison), so a type with genuinely elevated per-cell
-# ρ can no longer get unconditional protection on pure soup just because no
-# other type happens to be compared. See _ownership._type_masks's
-# ceiling_gate docstring and DEVLOG.md's 2026-09-09 entries for the full
-# design history (a rejected single-winner version, the T-cell/NK false-
-# competition root cause, and the median redesign's full-suite evaluation
-# before promotion: fetal erythroid Hb and realistic_gt clustering-quality
-# regressions eliminated; GSE218853 macro ARS/ERS cost real but halved
-# from the rejected version, +2.0pp/-1.6pp, judged acceptable).
+# Extra-clear uses the full χ mass of U genes.
+SOUP_ONLY_CHI_MASS = 1.0
+# Gate ceiling/collision protection on a cross-type r_t comparison.
 CEILING_CROSS_TYPE_GATE = True
 
 
@@ -170,9 +151,8 @@ def _apply_dose_enrichment(
 def _alloc_budget(tgt: float, room: np.ndarray, ws: np.ndarray) -> np.ndarray:
     """Spend ``tgt`` on buckets with capacity ``room``, weights ``ws``.
 
-    SoupX ``alloc``: if some genes saturate, leftover mass is reassigned to
-    genes that still have room. Callers must already zero-out weights on
-    protected genes so leftover cannot land on native markers.
+    If some genes saturate, leftover goes to genes that still have room.
+    Callers must zero weights on protected genes.
     """
     n = int(room.size)
     out = np.zeros(n, dtype=np.float64)
@@ -192,13 +172,8 @@ def _alloc_budget(tgt: float, room: np.ndarray, ws: np.ndarray) -> np.ndarray:
     w = ws[o]
     y = room[o]
     cy = np.concatenate([[0.0], np.cumsum(y[:-1])])
-    # Tail weight sum(w[i:]) via a reverse cumsum, not "1 - cumsum(w[:i])":
-    # the latter cancels two O(1) sums to recover a possibly tiny remainder
-    # (an near-zero-but-nonzero last weight rounds its own tail to exactly
-    # 0.0 once the running total saturates to 1.0 in float64), which
-    # collapses that bucket's saturation breakpoint onto its predecessor's
-    # and lets `sat` admit one bucket too many when `tgt` lands on that
-    # spurious tie -- overspending the budget by that bucket's whole room.
+    # Reverse cumsum for the tail. ``1 - cumsum(w[:i])`` can round a tiny
+    # last weight to 0 and admit one extra saturated bucket.
     tail_w = np.cumsum(w[::-1])[::-1]
     k = np.full(n, np.inf, dtype=np.float64)
     nz = w > 0
@@ -249,45 +224,10 @@ def _realloc_unspent_rank1(
     leftover_cap: float | None = None,
     rho_t: float | None = None,
 ) -> np.ndarray:
-    """Spend leftover χ-budget on non-protected, non-soupOnly genes.
+    """Spend leftover χ-budget on non-protected, non-U genes.
 
-    Protected genes keep their rank-1 slice. U genes stay on the soupOnly
-    path. Leftover is the unused part of ``dose`` after the clipped take.
-
-    ``r_t`` (``mean/expected``, from :func:`_type_masks`) down-weights genes
-    whose observed level sits well above the pure-ambient ceiling even
-    though they didn't clear the ``native_confidence`` significance test --
-    an under-powered real marker (r_t >> 1) should not be treated the same
-    as a gene that genuinely looks like ambient (r_t ~= 1) just because
-    both failed to reach significance. Without this, leftover mass
-    concentrates on whichever unprotected genes have the highest χ,
-    regardless of how implausible "this is pure ambient" already looks for
-    that specific gene -- the mechanism behind on-target markers (e.g. a
-    cell-type's own canonical genes in an under-powered cluster) being
-    fully zeroed out by reallocation despite never being flagged is_u.
-
-    A flat per-gene fold cap (a multiple of the gene's own base rank-1
-    share) was tried and rejected: on real kidney data, the "legitimate"
-    and "harmful" realloc multiples occupy the *same* range (median 2.96x,
-    p90 5.76x across ~400k real gene-cluster events) -- there is no
-    magnitude threshold that separates them, so any cap tight enough to
-    matter for kidney/fetal-liver also costs must-win, and any cap loose
-    enough to spare must-win (5x, at the measured p90) does not move
-    kidney/fetal-liver's aggregate leak_ratio at all (see CHANGELOG).
-
-    ``leftover_cap``, when given, bounds the *total* leftover actually
-    redistributed (not any one gene's share of it) -- the caller computes
-    what leftover the frozen single-winner ownership rule would have
-    produced and passes it here, so the gap-cascade's wider ownership
-    (more genes protected per type) can never push realloc's total
-    footprint past what the already-validated baseline had. This is a
-    structural cap tied to *why* extra leftover exists (newly-protected
-    genes freeing up budget), not to any single gene's magnitude.
-
-    When ``r_t`` is given, leftover weight is down-weighted by max(1, r_t)
-    and zeroed for ``r_t > 1``. Empty-droplet NB2 φ in leftover se was
-    tried (``docs/research/realloc_rt_ceiling_research_20260912.md``) and
-    failed must-win: hgmm 0.956→0.734. Not wired.
+    ``leftover_cap`` bounds the total leftover (from unique-argmax
+    ownership). Given ``r_t``, weight by 1/max(1, r_t) and skip r_t > 1.
     """
     leftover = max(0.0, float(dose) - float(np.sum(take)))
     if leftover_cap is not None:

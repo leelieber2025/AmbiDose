@@ -29,22 +29,22 @@ from ._dose import (
     _top_chi_indices as _top_chi_indices,
 )
 from ._dose import (
-    _two_component_mixture_em as _two_component_mixture_em,
-)
-from ._dose import (
-    _type_residual_score,
-)
-from ._dose import (
     diagnose_dose_disagreement as diagnose_dose_disagreement,
 )
 from ._dose import (
     estimate_dose as estimate_dose,
 )
 from ._dose import (
-    estimate_dose_mixture as estimate_dose_mixture,
-)
-from ._dose import (
     q_abs_scale as q_abs_scale,
+)
+from ._mixture import (
+    _two_component_mixture_em as _two_component_mixture_em,
+)
+from ._mixture import (
+    _type_residual_score,
+)
+from ._mixture import (
+    estimate_dose_mixture as estimate_dose_mixture,
 )
 from ._ownership import (
     _complete_linkage_labels as _complete_linkage_labels,

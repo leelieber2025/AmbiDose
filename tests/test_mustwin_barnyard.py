@@ -8,22 +8,17 @@ from __future__ import annotations
 
 import numpy as np
 
-from ambidose._dose import Q_SCALE_LOW_RHO, q_abs_scale
 from ambidose.datasets import make_barnyard_toy
 from ambidose.metrics import assign_majority_genome, barnyard_kill_row
 from ambidose.pp import DROPLET_KEY, LAYER_OUT, denoise, estimate_dose_adaptive
 
 
-def test_q_scale_skips_shrink_on_clean_library():
-    from ambidose._dose import _q_curve_scale
+def test_q_scale_is_identity():
+    from ambidose._dose import q_abs_scale
 
-    curve = _q_curve_scale(24.84)
-    clean = q_abs_scale(24.84, hat_rho=0.017)
-    dirty = q_abs_scale(17.58, hat_rho=0.81)
-    assert curve < clean < 1.0
-    assert dirty < 1.0
+    assert q_abs_scale(24.84, hat_rho=0.017) == 1.0
+    assert q_abs_scale(17.58, hat_rho=0.81) == 1.0
     assert q_abs_scale(24.84, hat_rho=0.0) == 1.0
-    assert 0.017 < Q_SCALE_LOW_RHO <= 0.10
 
 
 def test_mustwin_barnyard_toy_sensitivity_floor():
@@ -46,9 +41,7 @@ def test_mustwin_barnyard_toy_sensitivity_floor():
     assert row["n_inflated"] == 0
     assert 0.0 <= row["specificity"] <= 1.0
     rec = next(iter(adata.uns["ambidose"]["dose"]["samples"].values()))
-    if rec["hat_rho"] < Q_SCALE_LOW_RHO:
-        curve = q_abs_scale(rec["q"], hat_rho=Q_SCALE_LOW_RHO)
-        assert curve <= rec["q_scale"] <= 1.0
+    assert rec["q_scale"] == 1.0
 
 
 def test_mustwin_clean_library_does_not_shrink():
@@ -66,6 +59,4 @@ def test_mustwin_clean_library_does_not_shrink():
     estimate_chi(adata, sample_key=None, droplet_key=DROPLET_KEY)
     estimate_dose_adaptive(adata, type_key="true_species", sample_key=None, droplet_key=DROPLET_KEY)
     rec = next(iter(adata.uns["ambidose"]["dose"]["samples"].values()))
-    if rec["hat_rho"] < Q_SCALE_LOW_RHO:
-        curve = q_abs_scale(rec["q"], hat_rho=Q_SCALE_LOW_RHO)
-        assert curve <= rec["q_scale"] <= 1.0
+    assert rec["q_scale"] == 1.0

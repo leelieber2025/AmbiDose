@@ -35,6 +35,13 @@ adata = sc.read_10x_mtx("filtered_feature_bc_matrix/")
 adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
 ```
 
+The built-in `make_toy()` dataset is an API and edge-case demonstration,
+not a quantitative calibration set. Its small gene space and synthetic depth
+can produce a low sample-scale dose and `over_removal` trust flags, even when
+the generating contamination fraction is known. Do not use those flags or
+the toy's execution ratio as a performance expectation for a real library;
+use the held-out and benchmark datasets for that purpose.
+
 This returns a new, barcode/gene-aligned copy of `adata` with the results attached (any `obs` columns you already had are preserved) -- it does not mutate the object you passed in. `X` on the returned object is the denoised counts, ready for `sc.pp.normalize_total` etc. with no extra step; the original input moves to `layers["raw_counts"]` (same convention `analysis_ready()` uses, and the same convention the whitelist-first form below also follows).
 
 `write_report()`/`summarize()` work on this returned object, but only see cells: the empty droplets used to estimate χ were never part of `adata` and are not carried into the copy, so `n_empty`/`n_other` read 0 and the droplet-class and barcode-rank panels show cells only. If you want the full report with those panels, use the lower-level form below and call `write_report()` on its (mutated) raw object instead.

@@ -43,7 +43,7 @@ def test_denoise_passes_empty_umi_max_to_call_cells_lower(monkeypatch):
         seen_lower.append(kwargs.get("lower"))
         return real_call_cells(*args, **kwargs)
 
-    monkeypatch.setattr("ambidose.pp.call_cells", spy)
+    monkeypatch.setattr("ambidose._denoise.call_cells", spy)
     amdose.denoise(
         adata,
         cell_barcodes=cells,
@@ -1108,7 +1108,7 @@ def test_denoise_passes_n_jobs_to_cell_calling(monkeypatch):
         seen["n_jobs"] = kwargs.get("n_jobs")
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(amdose.pp, "call_cells", wrapped)
+    monkeypatch.setattr("ambidose._denoise.call_cells", wrapped)
     amdose.denoise(
         adata,
         cell_barcodes=cells,
@@ -1371,7 +1371,7 @@ def test_raw_mode_uses_internal_sentinel_for_noncell_types(monkeypatch):
         seen.extend(target.obs.loc[noncell, "cell_type"].tolist())
         return original(target, **kwargs)
 
-    monkeypatch.setattr(pp, "estimate_dose_adaptive", capture)
+    monkeypatch.setattr("ambidose._denoise.estimate_dose_adaptive", capture)
     amdose.denoise(filtered, raw=raw, type_key="cell_type", sample_key=None)
     assert seen
     assert all(value is EMPTY_TYPE for value in seen)

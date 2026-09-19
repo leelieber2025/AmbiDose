@@ -65,13 +65,9 @@ def run_cellbender(
 ) -> Path:
     """Run ``cellbender remove-background``. Returns the output ``.h5`` path.
 
-    ``estimator_multiple_cpu``: pass ``--estimator-multiple-cpu`` (CellBender's
-    own flag for parallelizing the MCKP posterior estimator across CPU
-    threads) -- relevant for ``estimator="mckp"``, which is markedly slower
-    than the default ``"map"`` and, on an 8GB card, OOMs well below
-    ``posterior_batch_size=512`` (see CHANGELOG's "CellBender baseline
-    fairness" entry; ``posterior_batch_size~32`` plus this flag is the
-    known-working combination on this project's GPU).
+    ``estimator_multiple_cpu``: CellBender ``--estimator-multiple-cpu``.
+    Useful with ``estimator="mckp"``; keep ``posterior_batch_size`` small
+    on 8 GB GPUs.
     """
     binary = find_cellbender()
     output_h5 = Path(output_h5)
