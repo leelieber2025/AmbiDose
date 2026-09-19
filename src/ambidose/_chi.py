@@ -12,6 +12,7 @@ from ._shared import (
     SAMPLE_KEY_DEFAULT,
     _as_csr,
     _nb2_phi_from_empty,
+    _need,
     _profile,
     _reject_view,
     _require_raw_integer_counts,
@@ -48,7 +49,14 @@ def estimate_chi(
 
     empty = adata.obs[droplet_key].astype(str).to_numpy() == empty_label
     if int(empty.sum()) < min_empty:
-        raise ValueError(f"need at least {min_empty} empty droplets, got {int(empty.sum())}")
+        raise ValueError(
+            _need(
+                f"Need at least {min_empty} empty droplets, got {int(empty.sum())}.",
+                "Pass the Cell Ranger raw matrix (raw_feature_bc_matrix), not the "
+                "filtered matrix. Empty droplets are barcodes that are not on the "
+                "filtered list.",
+            )
+        )
 
     if sample_key is not None and sample_key not in adata.obs.columns:
         raise KeyError(f"sample_key={sample_key!r} not in adata.obs")
@@ -89,7 +97,11 @@ def estimate_chi(
         mask = empty & (sample_arr == name)
         if int(mask.sum()) < min_empty:
             raise ValueError(
-                f"sample {name!r}: need {min_empty} empty droplets, got {int(mask.sum())}"
+                _need(
+                    f"Sample {name!r}: need {min_empty} empty droplets, got {int(mask.sum())}.",
+                    "Pass the raw matrix for this library and a filtered barcode "
+                    "list that is a subset of those barcodes, not the filtered matrix alone.",
+                )
             )
         names.append(str(name))
         x_empty = x[mask]

@@ -511,7 +511,7 @@ def test_classify_rejects_invalid_empty_umi_range_atomically(kwargs):
 def test_classify_whitelist_failure_is_atomic():
     adata = make_toy(n_empty=10, n_cells=5, n_samples=1, seed=38)
     before = adata.obs.copy(deep=True)
-    with pytest.raises(ValueError, match="matched"):
+    with pytest.raises(ValueError, match="filtered barcodes"):
         classify_droplets(adata, cell_barcodes=["missing-barcode"])
     assert adata.obs.equals(before)
 
@@ -539,7 +539,7 @@ def test_call_cells_requires_noncell_candidates_atomically():
 def test_call_cells_failure_is_atomic():
     adata = make_toy(n_empty=10, n_cells=5, n_samples=1, seed=39)
     before = adata.obs.copy(deep=True)
-    with pytest.raises(ValueError, match="matched"):
+    with pytest.raises(ValueError, match="filtered barcodes"):
         call_cells(adata, method="chi", cell_barcodes=["missing-barcode"], niters=1)
     assert adata.obs.equals(before)
 

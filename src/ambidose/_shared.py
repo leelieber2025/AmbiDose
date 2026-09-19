@@ -179,6 +179,11 @@ def _same_matrix(left, right) -> bool:
     return a.shape == b.shape and (a != b).nnz == 0
 
 
+def _need(problem: str, action: str) -> str:
+    """ValueError text: what failed, then what to do."""
+    return f"{problem.rstrip()} {action.strip()}"
+
+
 def _validated_group_values(
     adata: AnnData, key: str, *, kind: str, allow_missing: bool
 ) -> pd.Series:

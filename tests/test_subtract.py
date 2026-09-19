@@ -245,7 +245,7 @@ def test_subtract_requires_dose_sample_key_match():
     cells.uns["ambidose_chi"] = adata.uns["ambidose_chi"]
     estimate_dose(cells, sample_key="sample")
 
-    with pytest.raises(ValueError, match="parameters do not match dose provenance"):
+    with pytest.raises(ValueError, match="do not match how dose was estimated"):
         subtract(cells, sample_key="sample_other")
 
 
@@ -1734,7 +1734,7 @@ def test_subtract_rejects_type_key_different_from_dose_provenance():
             "cell_label": "cell",
         },
     }
-    with pytest.raises(ValueError, match="parameters do not match dose provenance"):
+    with pytest.raises(ValueError, match="do not match how dose was estimated"):
         subtract(ad, type_key="cluster_B")
 
 

@@ -109,7 +109,7 @@ def test_multi_sample_missing_empties_raises_for_that_sample():
         adata.obs[DROPLET_KEY].astype(str) == "empty"
     )
     adata.obs.loc[s1_empty, DROPLET_KEY] = "other"
-    with pytest.raises(ValueError, match="sample 's1'"):
+    with pytest.raises(ValueError, match="Sample 's1'"):
         estimate_chi(adata, sample_key="sample")
 
 
@@ -153,7 +153,7 @@ def test_classify_matches_trailing_minus_one_suffix():
 def test_classify_rejects_unmatched_whitelist():
     ad = AnnData(_csr([[200.0]]))
     ad.obs_names = ["CELL"]
-    with pytest.raises(ValueError, match="0/1 cell_barcodes matched"):
+    with pytest.raises(ValueError, match="0/1 filtered barcodes"):
         classify_droplets(ad, cell_barcodes=["TOTALLY_OTHER"])
 
 

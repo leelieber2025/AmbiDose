@@ -42,6 +42,7 @@ from ._shared import (
     _as_csr,
     _configure_scanpy_n_jobs,
     _feature_keys,
+    _need,
     _reject_view,
     _require_raw_integer_counts,
     _same_matrix,
@@ -517,15 +518,12 @@ def denoise(
     when it agrees with the mixture estimate. ``typing_fast`` uses a cheaper
     graph on libraries with at least ``TYPING_FAST_N_CELLS`` cells.
 
-    Cell calling: whenever ``cell_barcodes`` resolves to a whitelist (given
-    explicitly, auto-detected from a Cell Ranger ``outs/`` directory, or via
-    a manifest/root library), it is refined against ambient χ by default --
-    ``cell_calling`` values other than ``'off'``/``'none'``/``'external'``
-    (including the ``'diem'`` default) all mean "refine this whitelist."
-    Only ``cell_calling='off'`` trusts the list as-is and skips refinement.
-    Without any whitelist, ``cell_calling='diem'`` builds the empty/debris/
-    cell whitelist from scratch, ``emptydrops`` / ``expect_cells`` are as
-    documented, and ``empty_umi_max`` alone is smoke-only.
+    Cells come from the Cell Ranger filtered list when one is available
+    (``cell_barcodes``, auto-detected ``filtered_*`` next to raw, or
+    ``raw=`` filtered ``obs_names``). That list is used as-is. Pass
+    ``cell_calling='chi'`` only if that list is known to be over-called.
+    Without a filtered list, ``cell_calling='diem'`` / ``'emptydrops'`` /
+    ``expect_cells`` build a cell list from the raw matrix.
 
     ``cell_barcodes`` is only read when droplet labels and χ are not already
     on the object. Passing a new whitelist after a previous ``denoise()``
@@ -633,14 +631,9 @@ def denoise(
         if chi_ready and cell_barcodes is None:
             adata.obs[droplet_key] = pd.Categorical(["cell"] * adata.n_obs)
         elif cell_barcodes is not None:
-            # A whitelist is refined against ambient chi by default -- the
-            # only way to trust it as-is is an explicit cell_calling='off'.
-            off = cell_calling is not None and str(cell_calling).strip().lower() in (
-                "off",
-                "none",
-                "external",
-            )
-            if off:
+            calling = None if cell_calling is None else str(cell_calling).strip().lower()
+            trust = calling is None or calling in ("off", "none", "external")
+            if trust:
                 if isinstance(cell_barcodes, (str, Path)):
                     from .io import read_10x_barcodes
 
@@ -663,6 +656,14 @@ def denoise(
                 }
                 adata.uns["ambidose"] = uns
             else:
+                if calling != "chi":
+                    raise ValueError(
+                        _need(
+                            f"cell_calling={cell_calling!r} does not use the filtered barcode list.",
+                            "Omit cell_calling to use the 10x filtered barcodes as cells. "
+                            "Pass cell_calling='chi' only to trim that list against soup.",
+                        )
+                    )
                 if isinstance(cell_barcodes, (str, Path)):
                     from .io import read_10x_barcodes
 
@@ -704,8 +705,11 @@ def denoise(
             "external",
         ):
             raise ValueError(
-                "cell_calling='off' needs cell_barcodes (Cell Ranger filtered "
-                "list or another whitelist)"
+                _need(
+                    "cell_calling='off' has no filtered barcode list to use.",
+                    "Pass cell_barcodes= the Cell Ranger filtered barcodes, "
+                    "or a Cell Ranger outs/ folder so they are found automatically.",
+                )
             )
         elif (
             cell_calling is not None and str(cell_calling).strip().lower() in ("diem", "emptydrops")
@@ -748,10 +752,12 @@ def denoise(
             )
         else:
             raise ValueError(
-                "denoise() needs cell_barcodes, cell_calling='diem' or "
-                "'emptydrops', expect_cells (OrdMag/force-cells), existing "
-                "obs['ambidose_droplet'], or a stored χ. UMI-threshold "
-                "cell calling is smoke-only: pass empty_umi_max explicitly"
+                _need(
+                    "denoise() has no cell list.",
+                    "Pass a Cell Ranger outs/ folder or cell_barcodes= the "
+                    "filtered barcodes TSV. Only if that list is missing, use "
+                    "cell_calling='diem' or 'emptydrops'.",
+                )
             )
     if sample_key is not None and sample_key not in adata.obs.columns:
         raise KeyError(f"sample_key={sample_key!r} not in adata.obs")
@@ -761,7 +767,11 @@ def denoise(
         if chi_ready:
             if CHI_KEY not in adata.uns:
                 raise ValueError(
-                    f"explicit sample_key requires sample-specific profiles in uns[{CHI_KEY!r}]"
+                    _need(
+                        f"sample_key is set but uns[{CHI_KEY!r}] has no per-library χ.",
+                        "Re-run estimate_chi with the same sample_key, or omit sample_key "
+                        "for a single library.",
+                    )
                 )
             _validate_chi_frame(adata, sk)
     uns = dict(adata.uns.get("ambidose", {}))

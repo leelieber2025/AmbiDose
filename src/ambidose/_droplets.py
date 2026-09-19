@@ -63,6 +63,7 @@ from ._shared import (
     SAMPLE_KEY_DEFAULT,
     _as_csr,
     _mc_worker_count,
+    _need,
     _reject_view,
     _require_raw_integer_counts,
     _stable_count_order,
@@ -166,8 +167,11 @@ def classify_droplets(
         n_wanted = len(wanted)
         if n_matched != n_wanted:
             raise ValueError(
-                f"{n_matched}/{n_wanted} cell_barcodes matched adata.obs_names; "
-                "every whitelist barcode must be present after normalization"
+                _need(
+                    f"{n_matched}/{n_wanted} filtered barcodes were found in this matrix.",
+                    "Input must be the Cell Ranger raw matrix. The filtered barcode "
+                    "list has to be from the same library.",
+                )
             )
         label[is_cell] = "cell"
         cap = 100 if empty_umi_max is None else empty_umi_max
@@ -808,8 +812,11 @@ def _cell_barcode_mask(adata: AnnData, cell_barcodes) -> np.ndarray:
     n_matched = int(is_cell.sum())
     if n_matched != len(wanted):
         raise ValueError(
-            f"{n_matched}/{len(wanted)} cell_barcodes matched adata.obs_names; "
-            "every whitelist barcode must be present after normalization"
+            _need(
+                f"{n_matched}/{len(wanted)} filtered barcodes were found in this matrix.",
+                "Input must be the Cell Ranger raw matrix. The filtered barcode "
+                "list has to be from the same library.",
+            )
         )
     return is_cell
 

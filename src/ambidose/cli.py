@@ -98,16 +98,12 @@ def main(argv: list[str] | None = None) -> int:
         "--cell-calling",
         choices=["diem", "chi", "emptydrops", "ordmag", "force", "off"],
         default=None,
-        help="unset (default): with a whitelist available (explicit "
-        "--cell-barcodes, auto-detected Cell Ranger filtered barcodes, or a "
-        "manifest/root library), refines it against empty-droplet χ -- same "
-        "as passing chi explicitly. With --expected-cells and no whitelist, "
-        "calls cells with Cell Ranger OrdMag. With neither, builds our own "
-        "empty/debris/cell mixture whitelist (same as passing diem "
-        "explicitly). "
-        "off: trust the whitelist as-is, do not refine or call cells. "
-        "emptydrops / ordmag / force: Lun 2019 or Cell Ranger step 1, only "
-        "meaningful without a whitelist",
+        help="unset (default): use Cell Ranger filtered barcodes as cells "
+        "when a list is available (--cell-barcodes or auto-detected "
+        "filtered_*). chi: trim that list against soup (special case). "
+        "diem / emptydrops / ordmag / force: call cells from the raw matrix "
+        "when there is no 10x filtered list. "
+        "off: same as the default when a filtered list is present",
     )
     p_den.add_argument(
         "--max-cells",
@@ -356,10 +352,8 @@ def _denoise_root(args: argparse.Namespace):
         if bc is not None:
             print(f"  auto-detected filtered barcodes at {bc}")
             whitelist = read_10x_barcodes(bc)
-            # Refined against ambient chi by default; --cell-calling off is
-            # the only way to trust the Cell Ranger whitelist as-is.
-            if str(args.cell_calling).strip().lower() != "off":
-                print("  refining whitelist against empty-droplet χ", flush=True)
+            if str(args.cell_calling).strip().lower() == "chi":
+                print("  trimming filtered barcodes against soup", flush=True)
                 whitelist = call_cells(
                     ad,
                     method="chi",
@@ -425,10 +419,8 @@ def _denoise_manifest(args: argparse.Namespace):
                 "raw matrix; UMI-threshold cell calling is not a product path"
             )
         whitelist = _read_barcode_file(source)
-        # Refined against ambient chi by default; --cell-calling off is the
-        # only way to trust the manifest/auto-detected whitelist as-is.
-        if str(args.cell_calling).strip().lower() != "off":
-            print(f"[{number}/{len(rows)}] refining whitelist against empty-droplet χ", flush=True)
+        if str(args.cell_calling).strip().lower() == "chi":
+            print(f"[{number}/{len(rows)}] trimming filtered barcodes against soup", flush=True)
             whitelist = call_cells(
                 adata,
                 method="chi",
@@ -503,11 +495,9 @@ def _denoise(args: argparse.Namespace) -> int:
             "10x-mtx writes the denoised cell matrix as X (no layers). "
             "Pass --cells-only, or use --output-format h5ad"
         )
-    # None means "not specified"; denoise() already resolves that correctly
-    # per context (ordmag with --expected-cells, chi-refine with a whitelist)
-    # -- only the no-whitelist/no-expected-cells case below must be resolved
-    # to an explicit "diem" here, or denoise() falls through to its
-    # smoke-only empty_umi_max path instead of the diem mixture model.
+    # None means "not specified". denoise() uses a filtered list as-is when
+    # one is present. Without a list or --expected-cells, the CLI sets diem
+    # so denoise() does not fall through to the smoke-only UMI cutoff.
     cell_calling = args.cell_calling
     if args.manifest:
         adata = _denoise_manifest(args)
@@ -536,16 +526,14 @@ def _denoise(args: argparse.Namespace) -> int:
                 )
             print(f"[2/6] using external whitelist {src} (--cell-calling off)")
         elif src is not None:
-            # A whitelist (explicit or auto-detected) is refined against
-            # ambient chi by default; only --cell-calling off (above) skips
-            # that and trusts it as-is.
             label = (
                 "external whitelist"
                 if args.cell_barcodes is not None
-                else "auto-detected filtered barcodes"
+                else "Cell Ranger filtered barcodes"
             )
             print(f"[2/6] using {label} {src}")
-            print("[2/6] refining whitelist against empty-droplet χ", flush=True)
+            if cell_calling == "chi":
+                print("[2/6] trimming that list against empty-droplet χ", flush=True)
         elif cell_calling in ("diem", "emptydrops") or cell_calling is None:
             cell_calling = cell_calling or "diem"
             print(f"[2/6] calling cells with {cell_calling}", flush=True)

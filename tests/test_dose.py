@@ -757,7 +757,7 @@ def test_dose_rejects_layer_different_from_chi_provenance(estimator_name):
     adata.layers["spliced"] = adata.X.copy()
     estimate_chi(adata, droplet_key="droplet", sample_key=None, layer="total")
     estimator = estimate_dose if estimator_name == "fixed" else estimate_dose_mixture
-    with pytest.raises(ValueError, match="chi provenance"):
+    with pytest.raises(ValueError, match="how χ was estimated"):
         estimator(
             adata, type_key="cell_type", sample_key=None, droplet_key="droplet", layer="spliced"
         )

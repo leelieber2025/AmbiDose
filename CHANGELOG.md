@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.7] - 2026-09-19
+
+### Changed
+
+- `denoise()` and the CLI now use a Cell Ranger filtered barcode list as
+  cells as-is by default (explicit `--cell-barcodes`, auto-detected
+  `filtered_*`, or a manifest/root library). Previously that list was
+  refined against ambient χ by default. Pass `cell_calling='chi'`
+  (`--cell-calling chi`) to trim it against soup instead;
+  `cell_calling='off'` remains equivalent to the new default.
+  `'diem'` / `'emptydrops'` / `expect_cells` are unchanged and only apply
+  when no filtered list is available.
+- Error messages for missing empty droplets, an unmatched barcode list,
+  and dose/χ or subtract/dose provenance mismatches now state the problem
+  and what to pass next, instead of a single terse sentence. Exact
+  message text changed; code matching on the old wording should match on
+  the new wording instead.
+
 ## [0.5.6] - 2026-09-18
 
 Several dose, ownership, and soupOnly thresholds that were fixed constants

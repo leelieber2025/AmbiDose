@@ -21,6 +21,7 @@ from ._shared import (
     _as_csr,
     _chi_for_obs,
     _chi_vector,
+    _need,
     _reject_view,
     _require_raw_integer_counts,
     _resolve_cell_mask,
@@ -48,7 +49,11 @@ def _validate_chi_provenance(adata: AnnData, *, sample_key, layer) -> None:
     stored = {key: provenance.get(key) for key in requested}
     if stored != requested:
         raise ValueError(
-            f"dose parameters do not match chi provenance: stored={stored}, requested={requested}"
+            _need(
+                f"Dose settings do not match how χ was estimated (stored={stored}, "
+                f"requested={requested}).",
+                "Re-run estimate_chi with the same sample_key and layer, or call denoise().",
+            )
         )
 
 

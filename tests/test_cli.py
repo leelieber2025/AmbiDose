@@ -264,6 +264,8 @@ def test_denoise_cli_manifest_passes_empty_umi_max_as_lower(tmp_path, monkeypatc
                 "cell_type",
                 "--empty-umi-max",
                 "50",
+                "--cell-calling",
+                "chi",
                 "--output",
                 str(out),
             ]
@@ -294,6 +296,8 @@ def test_denoise_cli_root_passes_empty_umi_max_as_lower(tmp_path, monkeypatch):
                 str(tmp_path),
                 "--empty-umi-max",
                 "50",
+                "--cell-calling",
+                "chi",
                 "--output",
                 str(out),
             ]

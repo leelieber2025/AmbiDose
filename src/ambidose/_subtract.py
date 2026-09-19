@@ -48,6 +48,7 @@ from ._shared import (
     _chi_for_obs,
     _chi_vector,
     _feature_keys,
+    _need,
     _reject_view,
     _require_raw_integer_counts,
     _resolve_cell_mask,
@@ -170,8 +171,12 @@ def subtract(
             }
             if provenance != requested:
                 raise ValueError(
-                    "subtract parameters do not match dose provenance: "
-                    f"stored={provenance}, requested={requested}"
+                    _need(
+                        "subtract() arguments do not match how dose was estimated "
+                        f"(stored={provenance}, requested={requested}).",
+                        "Re-run estimate_dose with these arguments, or call denoise() "
+                        "instead of subtract() alone.",
+                    )
                 )
 
     use_mask = type_key is not None and type_key in adata.obs.columns and clip_negative

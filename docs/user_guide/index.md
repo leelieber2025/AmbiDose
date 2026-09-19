@@ -2,7 +2,7 @@
 
 The supported workflow has four stages:
 
-1. classify raw droplets, refining an available whitelist by default;
+1. classify raw droplets, using Cell Ranger filtered barcodes as cells when they are available;
 2. estimate one ambient profile per library from empty droplets;
 3. estimate a per-cell ambient dose using coarse groups (or a caller-supplied broad `type_key`);
 4. subtract the dose into a new integer-count layer.
