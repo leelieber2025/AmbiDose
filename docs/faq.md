@@ -27,6 +27,10 @@ For biological samples multiplexed in one GEM/library, their OCM assignments are
 
 Not to estimate $\chi$: filtered matrices normally discard the empty-droplet pool. You may denoise a cell-only AnnData only when it already carries a valid `ambidose_chi` estimated from the matching raw library.
 
+## What happens on a very clean library?
+
+If a type's unexpressed-unowned UMIs are compatible with empty droplets, or estimated soup per cell is no larger than the empty-droplet mean, extra-clear and leftover reallocation are skipped. Rank-1 along $\chi$ still runs. `uns["ambidose"]["n_empty_consistent_skip_cells"]` counts cells in those types. This does not turn off subtraction on deep 10x libraries whose estimated soup per cell still exceeds one empty droplet.
+
 ## Which matrix should I use?
 
 Raw integer UMI counts. Do not normalize, log-transform, scale, or select HVGs before denoising. The corrected matrix is written to a layer; perform standard Scanpy preprocessing afterward.

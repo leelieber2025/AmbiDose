@@ -94,13 +94,11 @@ def test_zero_ambient_truth_and_no_inflation():
     denoise(ad, cell_barcodes=names, type_key="cell_type", sample_key=None)
     den = ad.layers["ambidose_denoised"].tocsr()
     assert (den > raw).nnz == 0
-    # Regression ceiling for this fixed fixture (current loss is 5.39%).
-    # This is not a claim that zero ambient is identifiable: the fixture
-    # contains weak native off-block expression resembling contamination.
-    # denoise replaces X, so comparing against X after the call would only
-    # compare the corrected matrix with itself and miss overcorrection.
+    # Off-block native leak is not identifiable as exact zero. Empty-consistent
+    # skip of extra-clear/leftover keeps loss below the old ~5% ceiling.
     loss = float((raw[cells] - den[cells]).sum()) / float(raw[cells].sum())
-    assert 0 <= loss < 0.06
+    assert 0 <= loss < 0.04
+    assert ad.uns["ambidose"].get("n_empty_consistent_skip_cells", 0) > 0
     rho = ad.obs.loc[cells, "ambidose_rho"].to_numpy(dtype=float)
     # A tighter rho<0.05 check used to be xfailed below this test; it was
     # a wrong expectation, not a bug (see

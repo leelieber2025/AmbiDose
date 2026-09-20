@@ -25,7 +25,13 @@ from ._budget import (
     _revoke_u_with_expressing_subset,
     _selected_data_positions,
 )
-from ._dose import _native_everywhere_mask, _soup_u_mask, _unexpressed_mask
+from ._dose import (
+    _native_everywhere_mask,
+    _soup_per_cell_fits_empty,
+    _soup_u_mask,
+    _u_mass_fits_empty_droplets,
+    _unexpressed_mask,
+)
 from ._ownership import (
     _ceiling_cross_type_gate,
     _cross_type_anchor_mask,
@@ -86,7 +92,10 @@ def subtract(
     ``d_c = ρ_c n_c`` is the per-cell budget. Unused rank-1 after clipping
     on protected genes is reallocated along χ. Unowned takes are blended
     toward ``take × max(Pearson(y/n, ρ), 0)``. Extra-clear is limited to
-    remaining ``d_c``. ``clip_negative=False`` is continuous residual mode.
+    remaining ``d_c``. Extra-clear and leftover realloc are skipped when
+    unexpressed-unowned UMIs match empty droplets, or estimated soup per
+    cell is not above the empty mean. ``clip_negative=False`` is continuous
+    residual mode.
     """
     _validate_output_layer(layer=layer, layer_out=layer_out)
     if high_u_remaining_multiplier < 0 or not np.isfinite(high_u_remaining_multiplier):
@@ -204,6 +213,7 @@ def subtract(
         types = _validated_type_values(adata, type_key).to_numpy()
         types = np.where(is_cell, types, EMPTY_TYPE)
         n_tiny_protected = 0
+        n_empty_skip = 0
         n_meta_groups = 0
         mt_mask = _mt_gene_mask(adata.var_names)
         samples = _sample_names(adata, sample_key)
@@ -217,6 +227,7 @@ def subtract(
         def process_sample(s):
             sample_native: dict[str, list[int]] = {}
             sample_tiny = 0
+            sample_empty_skip = 0
             chi = _chi_for_obs(
                 adata,
                 sample_key=sample_key if s is not None else None,
@@ -224,6 +235,15 @@ def subtract(
             )
 
             in_s = sample_of == s
+            empty_idx_s = np.flatnonzero(in_s & ~is_cell)
+            if empty_idx_s.size:
+                lam_e = float(n[empty_idx_s].mean())
+            else:
+                recs = adata.uns.get("ambidose", {}).get("empty_umi", {})
+                rec = recs.get(_sample_storage_id(None if s is None else str(s)), {})
+                if not rec and recs:
+                    rec = next(iter(recs.values()))
+                lam_e = float(rec["lam_e"]) if rec.get("lam_e") is not None else 0.0
             types_s_all = np.where(in_s, types, EMPTY_TYPE)
             type_names_s = list(pd.unique(types[in_s]))
             type_indices_s = {t: np.flatnonzero(in_s & (types == t)) for t in type_names_s}
@@ -373,6 +393,13 @@ def subtract(
                     take_sw = _confidence_weighted_take(y_cl, chi, d_sum, conf_sw, None)
                     take_sw = np.where(is_u_sw, 0.0, take_sw)
                     leftover_cap = max(0.0, d_sum - float(np.sum(take_sw)))
+                    fits_empty = _u_mass_fits_empty_droplets(
+                        x, idx, empty_idx_s, is_u, lam_e=lam_e, chi=chi
+                    ) or _soup_per_cell_fits_empty(rho_t, n_bar_t, lam_e)
+                    if fits_empty:
+                        is_u = np.zeros(adata.n_vars, dtype=bool)
+                        leftover_cap = 0.0
+                        sample_empty_skip += int(idx.size)
                 d_idx = d_v[idx]
                 # Rank-1 along χ; extra-clear of unexpressed unowned genes follows.
                 take_rank1 = _confidence_weighted_take(y_cl, chi, d_sum, native_confidence, None)
@@ -447,13 +474,13 @@ def subtract(
                     separators=(",", ":"),
                 )
                 sample_native[group_key] = np.flatnonzero(is_p).tolist()
-            return sample_native, sample_n_meta, sample_tiny
+            return sample_native, sample_n_meta, sample_tiny, sample_empty_skip
 
         sample_results = list(map(process_sample, groups))
         native_internal: dict[str, list[int]] = {}
         meta_groups_by_sample: dict[str, dict] = {}
         total_meta_groups = 0
-        for sample, (sample_native, sample_n_meta, sample_tiny) in zip(
+        for sample, (sample_native, sample_n_meta, sample_tiny, sample_empty_skip) in zip(
             groups, sample_results, strict=True
         ):
             native_internal.update(sample_native)
@@ -466,6 +493,7 @@ def subtract(
             n_meta_groups = max(n_meta_groups, sample_n_meta)
             total_meta_groups += sample_n_meta
             n_tiny_protected += sample_tiny
+            n_empty_skip += sample_empty_skip
         native_idx_by_type: dict[str, list[int]] = {}
         native_group_identity: dict[str, dict] = {}
         for i, identity_key in enumerate(sorted(native_internal)):
@@ -485,6 +513,7 @@ def subtract(
         uns["total_meta_groups"] = int(total_meta_groups)
         uns["max_meta_groups_per_sample"] = int(n_meta_groups)
         uns["n_tiny_protected_cells"] = int(n_tiny_protected)
+        uns["n_empty_consistent_skip_cells"] = int(n_empty_skip)
         adata.uns["ambidose"] = uns
         if n_tiny_protected:
             print(

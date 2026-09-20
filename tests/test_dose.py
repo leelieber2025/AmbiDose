@@ -909,6 +909,26 @@ def test_diagnose_rejects_mismatched_estimator_provenance():
         diagnose_dose_disagreement(adata)
 
 
+def test_u_mass_fits_empty_droplets_separates_soup_from_clean():
+    from scipy import sparse
+
+    from ambidose._dose import _u_mass_fits_empty_droplets
+
+    # 2 genes. Empties have 10 UMI on gene 0. Cells with soup-like U have 80.
+    empty = np.tile([10.0, 0.0], (20, 1))
+    clean = np.tile([8.0, 80.0], (10, 1))
+    dirty = np.tile([40.0, 80.0], (10, 1))
+    x = sparse.csr_matrix(np.vstack([clean, dirty, empty]))
+    is_u = np.array([True, False])
+    empty_idx = np.arange(20, 40)
+    assert _u_mass_fits_empty_droplets(x, np.arange(10), empty_idx, is_u)
+    assert not _u_mass_fits_empty_droplets(x, np.arange(10, 20), empty_idx, is_u)
+    from ambidose._dose import _soup_per_cell_fits_empty
+
+    assert _soup_per_cell_fits_empty(0.05, 400.0, 50.0)
+    assert not _soup_per_cell_fits_empty(0.15, 500.0, 30.0)
+
+
 def test_dose_prefix_and_expression_floor_are_sample_determined():
     from ambidose._dose import _chi_prefix_n, _expression_floor
 

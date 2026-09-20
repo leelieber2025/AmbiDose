@@ -190,6 +190,46 @@ def _mean_compatible_with_type_rho(
     return mean <= expected_soup + margin
 
 
+def _u_mass_fits_empty_droplets(
+    x,
+    cell_idx: np.ndarray,
+    empty_idx: np.ndarray,
+    is_u: np.ndarray,
+    *,
+    noise_k: float = NOISE_K,
+    lam_e: float | None = None,
+    chi: np.ndarray | None = None,
+) -> bool:
+    """True if this type's U-gene UMI total is compatible with empty droplets.
+
+    Empty mean on U genes × n_cells is the soup-per-droplet null. When
+    empty rows are absent, ``lam_e * χ_U * n_cells`` is the same null.
+    """
+    u = np.asarray(is_u, dtype=bool)
+    if not u.any() or cell_idx.size == 0:
+        return False
+    cols = np.flatnonzero(u)
+    observed = float(np.asarray(x[cell_idx][:, cols].sum()))
+    if empty_idx.size:
+        empty_u = float(np.asarray(x[empty_idx][:, cols].sum()))
+        expected = empty_u / empty_idx.size * cell_idx.size
+    elif lam_e is not None and chi is not None and lam_e > 0:
+        expected = float(lam_e) * float(np.asarray(chi)[u].sum()) * cell_idx.size
+    else:
+        return False
+    return observed <= expected + noise_k * np.sqrt(max(expected, 0.0))
+
+
+def _soup_per_cell_fits_empty(
+    rho_t: float, n_bar: float, lam_e: float, *, noise_k: float = NOISE_K
+) -> bool:
+    """True if estimated soup UMIs per cell are not above one empty droplet."""
+    if not np.isfinite(lam_e) or lam_e <= 0 or n_bar <= 0:
+        return False
+    soup = float(rho_t) * float(n_bar)
+    return soup <= lam_e + noise_k * np.sqrt(lam_e)
+
+
 def _soup_u_mask(
     mean: np.ndarray,
     chi: np.ndarray,
