@@ -6,13 +6,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- Extra-clear and leftover reallocation are now skipped for a type-sample
-  group whose total unexpressed-unowned (U) gene UMI mass, or estimated
-  soup UMIs per cell, already matches the empty-droplet background under
-  a Poisson-style margin. Applies in `subtract()`, including when a
-  sample has no empty droplets but `uns["ambidose"]["empty_umi"]` has a
-  stored per-sample baseline. Affected cells are counted in
-  `uns["ambidose"]["n_empty_consistent_skip_cells"]`.
+- For types whose unexpressed-unowned UMI mass, or estimated soup per
+  cell, matches empty droplets (Poisson), extra-clear and leftover
+  realloc are skipped and rank-1 is capped at empty U-gene soup instead
+  of the full estimated dose. Removal stays low, not zero. Affected cells
+  are counted in `uns["ambidose"]["n_empty_consistent_skip_cells"]`.
 
 ## [0.5.8] - 2026-09-20
 

@@ -927,6 +927,10 @@ def test_u_mass_fits_empty_droplets_separates_soup_from_clean():
 
     assert _soup_per_cell_fits_empty(0.05, 400.0, 50.0)
     assert not _soup_per_cell_fits_empty(0.15, 500.0, 30.0)
+    from ambidose._dose import _empty_consistent_rank1_budget
+
+    cap = _empty_consistent_rank1_budget(800.0, 10, empty_idx, x, is_u)
+    assert 0 < cap < 800.0
 
 
 def test_dose_prefix_and_expression_floor_are_sample_determined():

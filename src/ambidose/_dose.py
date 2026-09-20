@@ -230,6 +230,35 @@ def _soup_per_cell_fits_empty(
     return soup <= lam_e + noise_k * np.sqrt(lam_e)
 
 
+def _empty_consistent_rank1_budget(
+    d_sum: float,
+    n_cells: int,
+    empty_idx: np.ndarray,
+    x,
+    is_u: np.ndarray,
+    *,
+    lam_e: float = 0.0,
+    chi: np.ndarray | None = None,
+) -> float:
+    """Rank-1 mass for an empty-consistent type: at most empty U-gene soup.
+
+    Extra-clear and leftover stay off. Rank-1 still runs, but not at the
+    full estimated ``d_sum``.
+    """
+    budget = float(max(d_sum, 0.0))
+    u = np.asarray(is_u, dtype=bool)
+    cap = None
+    if u.any() and empty_idx.size:
+        cols = np.flatnonzero(u)
+        empty_u = float(np.asarray(x[empty_idx][:, cols].sum()))
+        cap = empty_u / empty_idx.size * n_cells
+    elif u.any() and lam_e > 0 and chi is not None:
+        cap = float(lam_e) * float(np.asarray(chi)[u].sum()) * n_cells
+    if cap is None or cap <= 0:
+        return budget
+    return float(min(budget, cap))
+
+
 def _soup_u_mask(
     mean: np.ndarray,
     chi: np.ndarray,

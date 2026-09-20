@@ -26,6 +26,7 @@ from ._budget import (
     _selected_data_positions,
 )
 from ._dose import (
+    _empty_consistent_rank1_budget,
     _native_everywhere_mask,
     _soup_per_cell_fits_empty,
     _soup_u_mask,
@@ -92,10 +93,10 @@ def subtract(
     ``d_c = ρ_c n_c`` is the per-cell budget. Unused rank-1 after clipping
     on protected genes is reallocated along χ. Unowned takes are blended
     toward ``take × max(Pearson(y/n, ρ), 0)``. Extra-clear is limited to
-    remaining ``d_c``. Extra-clear and leftover realloc are skipped when
-    unexpressed-unowned UMIs match empty droplets, or estimated soup per
-    cell is not above the empty mean. ``clip_negative=False`` is continuous
-    residual mode.
+    remaining ``d_c``. When unexpressed-unowned UMIs match empty droplets,
+    or estimated soup per cell is not above the empty mean, extra-clear
+    and leftover realloc are skipped and rank-1 is capped at empty U-gene
+    soup. ``clip_negative=False`` is continuous residual mode.
     """
     _validate_output_layer(layer=layer, layer_out=layer_out)
     if high_u_remaining_multiplier < 0 or not np.isfinite(high_u_remaining_multiplier):
@@ -326,6 +327,7 @@ def subtract(
                 rho_t = float(d_sum / n_sum) if n_sum > 0 else 0.0
                 y_cl = np.asarray(x[idx].sum(axis=0)).ravel().astype(np.float64)
                 leftover_cap = None
+                rank1_budget = d_sum
                 anchor_u = np.zeros(adata.n_vars, dtype=bool)
                 if t in EMPTY_TYPES:
                     is_u = np.zeros(adata.n_vars, dtype=bool)
@@ -397,12 +399,23 @@ def subtract(
                         x, idx, empty_idx_s, is_u, lam_e=lam_e, chi=chi
                     ) or _soup_per_cell_fits_empty(rho_t, n_bar_t, lam_e)
                     if fits_empty:
+                        rank1_budget = _empty_consistent_rank1_budget(
+                            d_sum,
+                            idx.size,
+                            empty_idx_s,
+                            x,
+                            is_u,
+                            lam_e=lam_e,
+                            chi=chi,
+                        )
                         is_u = np.zeros(adata.n_vars, dtype=bool)
                         leftover_cap = 0.0
                         sample_empty_skip += int(idx.size)
                 d_idx = d_v[idx]
                 # Rank-1 along χ; extra-clear of unexpressed unowned genes follows.
-                take_rank1 = _confidence_weighted_take(y_cl, chi, d_sum, native_confidence, None)
+                take_rank1 = _confidence_weighted_take(
+                    y_cl, chi, rank1_budget, native_confidence, None
+                )
                 take_rank1 = np.where(is_u, 0.0, take_rank1)
                 ambient_support = _ambient_slope_support(x, idx, n, chi, d_idx)
                 take_rank1 = _migrate_unspent_rank1(

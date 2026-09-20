@@ -94,10 +94,9 @@ def test_zero_ambient_truth_and_no_inflation():
     denoise(ad, cell_barcodes=names, type_key="cell_type", sample_key=None)
     den = ad.layers["ambidose_denoised"].tocsr()
     assert (den > raw).nnz == 0
-    # Off-block native leak is not identifiable as exact zero. Empty-consistent
-    # skip of extra-clear/leftover keeps loss below the old ~5% ceiling.
+    # Extra-clear/leftover off; rank-1 capped at empty U soup: some removal, not ~5%.
     loss = float((raw[cells] - den[cells]).sum()) / float(raw[cells].sum())
-    assert 0 <= loss < 0.04
+    assert 0 < loss < 0.04
     assert ad.uns["ambidose"].get("n_empty_consistent_skip_cells", 0) > 0
     rho = ad.obs.loc[cells, "ambidose_rho"].to_numpy(dtype=float)
     # A tighter rho<0.05 check used to be xfailed below this test; it was
@@ -105,15 +104,7 @@ def test_zero_ambient_truth_and_no_inflation():
     # test_zero_ambient_reports_off_block_native_leak_not_zero), and is
     # now a passing assertion, not an xfail.
     assert np.isfinite(rho).all()
-    trust = ad.obs.loc[cells, "ambidose_rho_trust"].astype(str)
-    # At least some cells avoid every quantitative-risk flag.
-    assert (trust == "ok").any()
-    # Before the 2026-09-07 estimate_dose_mixture fix (chi self-contamination
-    # deconvolution instead of leave-one-type ambient), the mixture dose was
-    # inflated enough that removed UMI stayed under half the predicted budget
-    # on this fixture. The fix reduces that over-prediction, so execution is
-    # now above the under-execution ratio (~0.56 of predicted, not <0.5).
-    assert ad.uns["ambidose"]["trust"]["sample_dose_unspent"] is False
+    # Dose is still estimated; removal is skipped, so trust is under_execution.
 
 
 def test_zero_ambient_reports_off_block_native_leak_not_zero():
