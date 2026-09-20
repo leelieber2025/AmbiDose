@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.8] - 2026-09-20
+
+### Fixed
+
+- SoupOnly extra-clear no longer splits unexpressed-unowned (U) genes into
+  a "high-χ" and "low-χ" group before capping them at the remaining
+  `d_c`. That split was left over from 0.5.6's change to cover the full χ
+  mass (`SOUP_ONLY_CHI_MASS = 1.0`): every U gene with nonzero χ already
+  fell in the "high" group, so only a gene with exactly zero χ (an edge
+  case) ever reached the "low" group, where it additionally received a
+  dose-correlation reweighting no other U gene gets. All U genes now go
+  through the same single capping path. No change for any gene with
+  nonzero χ.
+
 ## [0.5.7] - 2026-09-19
 
 ### Changed

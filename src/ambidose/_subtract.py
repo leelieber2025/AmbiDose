@@ -19,7 +19,6 @@ from ._budget import (
     _cap_take_to_remaining,
     _confidence_weighted_take,
     _expand_take_to_cells,
-    _high_chi_u_mask,
     _integerize_corrected,
     _migrate_unspent_rank1,
     _pre_enrich_sat_mask,
@@ -408,12 +407,6 @@ def subtract(
                     renormalize=True,
                     observed=y_cl,
                 )
-                high_u = _high_chi_u_mask(is_u, chi)
-                take_u_high = np.where(high_u, take_u, 0.0)
-                take_u_low = np.where(is_u & ~high_u, take_u, 0.0)
-                take_u_low = _apply_dose_enrichment(
-                    x, idx, take_u_low, d_v, n, strength=ENRICH_STRENGTH
-                )
                 row_before = np.asarray(x[idx].sum(axis=1)).ravel()
                 _expand_take_to_cells(
                     x,
@@ -435,28 +428,17 @@ def subtract(
                 )
                 if cap_high_u_to_remaining:
                     rank1_lost = row_before - np.asarray(x[idx].sum(axis=1)).ravel()
-                    high_u_remaining = np.clip(d_idx - rank1_lost, 0.0, None) * float(
+                    u_remaining = np.clip(d_idx - rank1_lost, 0.0, None) * float(
                         high_u_remaining_multiplier
                     )
-                    take_u_high = _cap_take_to_remaining(take_u_high, high_u_remaining)
+                    take_u = _cap_take_to_remaining(take_u, u_remaining)
                 else:
-                    high_u_remaining = d_idx
+                    u_remaining = d_idx
                 _expand_take_to_cells(
                     x,
                     idx,
-                    take_u_high,
-                    high_u_remaining,
-                    data_positions=data_positions,
-                    cell_keys=obs_keys[idx],
-                )
-                lost = row_before - np.asarray(x[idx].sum(axis=1)).ravel()
-                remaining = np.clip(d_idx - lost, 0.0, None)
-                take_u_low = _cap_take_to_remaining(take_u_low, remaining)
-                _expand_take_to_cells(
-                    x,
-                    idx,
-                    take_u_low,
-                    remaining,
+                    take_u,
+                    u_remaining,
                     data_positions=data_positions,
                     cell_keys=obs_keys[idx],
                 )
