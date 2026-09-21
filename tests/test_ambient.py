@@ -145,7 +145,7 @@ def test_barcode_rank_inflection_below_knee_on_cliff():
 
 
 def test_empty_cloud_knee_is_empty_shoulder_not_cell_knee():
-    from ambidose._droplets import _empty_cloud_knee_umi
+    from ambidose._dose import _empty_cloud_knee_umi
 
     rng = np.random.default_rng(0)
     cells = rng.integers(800, 2000, size=80).astype(np.float64)

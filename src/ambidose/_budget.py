@@ -189,6 +189,27 @@ def _alloc_budget(tgt: float, room: np.ndarray, ws: np.ndarray) -> np.ndarray:
     return np.minimum(out, room)
 
 
+def _soup_first_chi(
+    chi: np.ndarray,
+    native_confidence: np.ndarray,
+    is_u: np.ndarray,
+) -> np.ndarray:
+    """Renormalize χ toward unexpressed and low-confidence genes.
+
+    Used only when the low-soup band already turned protection off. High
+    native confidence would otherwise absorb the rank-1 budget on genes the
+    type expresses, leaving exclusive soup on the χ tail.
+    """
+    chi = np.asarray(chi, dtype=np.float64)
+    conf = np.clip(np.asarray(native_confidence, dtype=np.float64), 0.0, 1.0)
+    weight = np.where(np.asarray(is_u, dtype=bool), 1.0, 1.0 - conf)
+    tilted = chi * weight
+    total = float(tilted.sum())
+    if total <= 0.0:
+        return chi
+    return tilted / total
+
+
 def _confidence_weighted_take(
     observed: np.ndarray,
     chi: np.ndarray,

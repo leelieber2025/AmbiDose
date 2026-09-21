@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +50,7 @@ from ._shared import (
     _validate_output_layer,
     _validated_sample_values,
     _validated_type_values,
+    get_logger,
     raw_count_matrix,
     require_run_keys,
 )
@@ -259,25 +259,28 @@ def _print_denoise_summary(
     ok_pct = 100.0 * n_ok / n_cell if n_cell else 0.0
     flagged_pct = 100.0 * n_flagged / n_cell if n_cell else 0.0
 
-    print("ambidose: denoise completed", file=sys.stderr)
-    print(f"  cells corrected:             {n_cell:,}", file=sys.stderr)
-    print(f"  reference empty droplets:    {n_empty:,}", file=sys.stderr)
-    print(f"  median estimated ambient:    {100.0 * median_rho:.1f}%", file=sys.stderr)
-    print(f"  median ambient UMI per cell: {median_dose:.1f}", file=sys.stderr)
+    log = get_logger()
+    log.info("ambidose: denoise completed")
+    log.info("  cells corrected:             %s", f"{n_cell:,}")
+    log.info("  reference empty droplets:    %s", f"{n_empty:,}")
+    log.info("  median estimated ambient:    %.1f%%", 100.0 * median_rho)
+    log.info("  median ambient UMI per cell: %.1f", median_dose)
     if median_execution_ratio is not None:
-        print(
-            f"  median dose actually removed: {100.0 * median_execution_ratio:.1f}%",
-            file=sys.stderr,
+        log.info(
+            "  median dose actually removed: %.1f%%",
+            100.0 * median_execution_ratio,
         )
-    print(f"  corrected counts:            layers[{layer_out!r}]", file=sys.stderr)
-    print("ambidose: QC for estimated ambient fractions", file=sys.stderr)
-    print(
-        f"  suitable for interpretation: {n_ok:,} cells ({ok_pct:.1f}%)",
-        file=sys.stderr,
+    log.info("  corrected counts:            layers[%r]", layer_out)
+    log.info("ambidose: QC for estimated ambient fractions")
+    log.info(
+        "  suitable for interpretation: %s cells (%.1f%%)",
+        f"{n_ok:,}",
+        ok_pct,
     )
-    print(
-        f"  interpret with caution:      {n_flagged:,} cells ({flagged_pct:.1f}%)",
-        file=sys.stderr,
+    log.info(
+        "  interpret with caution:      %s cells (%.1f%%)",
+        f"{n_flagged:,}",
+        flagged_pct,
     )
     reasons = (
         (TRUST_LOW_EVIDENCE, "too few informative genes"),
@@ -289,13 +292,12 @@ def _print_denoise_summary(
     for key, explanation in reasons:
         count = counts.get(key, 0)
         if count:
-            print(f"    {count:,}: {explanation}", file=sys.stderr)
+            log.info("    %s: %s", f"{count:,}", explanation)
     if n_flagged:
-        print(
+        log.info(
             "ambidose: QC flags concern interpretation of obs['ambidose_rho']; "
             "they are not a recommendation to remove those cells. See the QC "
-            "report or obs['ambidose_rho_trust'] for cell-level details.",
-            file=sys.stderr,
+            "report or obs['ambidose_rho_trust'] for cell-level details."
         )
 
 
@@ -740,10 +742,7 @@ def denoise(
                 key_added=droplet_key,
             )
         elif empty_umi_max is not None:
-            print(
-                "ambidose: empty_umi_max without cell_barcodes is smoke-only",
-                file=sys.stderr,
-            )
+            get_logger().info("ambidose: empty_umi_max without cell_barcodes is smoke-only")
             classify_droplets(
                 adata,
                 empty_umi_max=empty_umi_max,
@@ -778,18 +777,10 @@ def denoise(
     uns["sample_key"] = sk
     adata.uns["ambidose"] = uns
     if not chi_ready:
-        print(
-            "ambidose: estimating ambient profile (χ) from empty droplets...",
-            file=sys.stderr,
-            flush=True,
-        )
+        get_logger().info("ambidose: estimating ambient profile (χ) from empty droplets...")
         estimate_chi(adata, droplet_key=droplet_key, sample_key=sk, layer=layer)
     if type_key is None:
-        print(
-            "ambidose: resolving coarse cell types (Leiden clustering)...",
-            file=sys.stderr,
-            flush=True,
-        )
+        get_logger().info("ambidose: resolving coarse cell types (Leiden clustering)...")
     import scanpy as sc
 
     previous_scanpy_n_jobs = sc.settings.n_jobs
@@ -877,7 +868,7 @@ def denoise(
 
         report_path = Path("ambidose_report.html") if report is True else Path(report)
         write_report(adata, report_path)
-        print(f"ambidose: wrote QC report to {report_path.resolve()}", file=sys.stderr)
+        get_logger().info("ambidose: wrote QC report to %s", report_path.resolve())
         uns = dict(adata.uns.get("ambidose", {}))
         uns["report_completed"] = True
         adata.uns["ambidose"] = uns

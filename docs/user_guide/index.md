@@ -12,6 +12,7 @@ The supported workflow has four stages:
 | Inputs, labels, and multi-sample contract | {doc}`workflow` |
 | Command-line interface | {doc}`cli` |
 | Estimator and limitations | {doc}`method` |
+| ``uns['ambidose']`` fields | {doc}`uns` |
 
 ```{toctree}
 :maxdepth: 2
@@ -19,4 +20,5 @@ The supported workflow has four stages:
 workflow
 cli
 method
+uns
 ```

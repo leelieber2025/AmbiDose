@@ -26,6 +26,7 @@ from ._shared import (
     RHO_KEY,
     _reject_view,
     _sample_names,
+    get_logger,
 )
 from .io import write_10x_mtx
 from .pp import _has_variable_gene
@@ -99,7 +100,7 @@ def run_cellbender(
     if estimator_multiple_cpu:
         cmd.append("--estimator-multiple-cpu")
     # CellBender indexes `counts[total_droplets]`; that must be < n_barcodes.
-    print("cellbender:", " ".join(cmd), flush=True)
+    get_logger().info("cellbender: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
     return output_h5
 

@@ -29,7 +29,7 @@ Not to estimate $\chi$: filtered matrices normally discard the empty-droplet poo
 
 ## What happens on a very clean library?
 
-If a type's unexpressed-unowned UMIs are compatible with empty droplets, or estimated soup per cell is no larger than the empty-droplet mean, extra-clear and leftover reallocation are skipped and rank-1 along $\chi$ is capped at that empty U-gene soup (low removal, not none). `uns["ambidose"]["n_empty_consistent_skip_cells"]` counts those cells. If soup per cell is above that skip but still within 3× the empty-cloud UMI knee (empties below the cell/debris inflection), rank-1 follows the full $\chi$ profile rather than native-protected take. Deep 10x libraries whose soup per cell is well above that knee are unchanged.
+If a type's unexpressed-unowned UMIs are compatible with empty droplets, or estimated soup per cell is no larger than the empty-droplet mean, extra-clear and leftover reallocation are skipped and rank-1 along $\chi$ is capped at that empty U-gene soup (low removal, not none). `uns["ambidose"]["n_empty_consistent_skip_cells"]` counts those cells. `n_low_soup_full_chi_cells` counts cells that instead took a full χ rank-1 because soup per cell was within 3× the stored empty-cloud knee. Field list: {doc}`user_guide/uns`. If soup per cell is above that skip but still within 3× the empty-cloud UMI knee (empties below the cell/debris inflection), rank-1 follows the full $\chi$ profile rather than native-protected take. Deep 10x libraries whose soup per cell is well above that knee are unchanged.
 
 ## Which matrix should I use?
 

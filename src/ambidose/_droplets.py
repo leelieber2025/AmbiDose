@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import multiprocessing
-import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -69,6 +68,7 @@ from ._shared import (
     _stable_count_order,
     _usable_cpu_count,
     _validated_sample_values,
+    get_logger,
 )
 from ._shared import (
     SHRINK_K as SHRINK_K,
@@ -382,35 +382,6 @@ def _closer_to_cells_than_chi(
 def _barcode_knee_umi(totals: np.ndarray, *, lower: float) -> float:
     """UMI at the barcode-rank knee (EmptyDrops always-retain)."""
     return _barcode_rank_curve(totals, lower=lower)["knee_umi"]
-
-
-def _empty_cloud_knee_umi(totals: np.ndarray, empty_idx: np.ndarray) -> float:
-    """UMI knee of the empty cloud, not the cell-calling knee.
-
-    Restrict empties to below the library inflection (cell/debris cut),
-    then take the barcode-rank knee of that floor. On 10x this is the
-    high-empty shoulder (~tens of UMI), not the mean of all empties
-    (dominated by zeros) and not the cell knee (thousands of UMI).
-    """
-    totals = np.asarray(totals, dtype=np.float64).ravel()
-    empty_idx = np.asarray(empty_idx, dtype=np.int64).ravel()
-    if empty_idx.size == 0:
-        return 0.0
-    empty_n = totals[empty_idx]
-    if empty_idx.size < 50:
-        return float(np.mean(empty_n))
-    curve = _barcode_rank_curve(totals, lower=0.0)
-    infl = curve["inflection_umi"]
-    if np.isfinite(infl) and infl > 0:
-        floor = empty_n[empty_n < infl]
-    else:
-        floor = empty_n
-    if floor.size < 50:
-        return float(np.percentile(empty_n, 95)) if empty_n.size else 0.0
-    knee = _barcode_rank_curve(floor, lower=0.0)["knee_umi"]
-    if not np.isfinite(knee) or knee <= 0:
-        return float(np.percentile(floor, 95))
-    return float(knee)
 
 
 def _ordmag_count(totals: np.ndarray, n_expect: int) -> tuple[int, float]:
@@ -998,10 +969,7 @@ def call_cells(
             f"cell calling must leave at least {min_empty} non-cell candidates; got {n_noncell}"
         )
     names = adata.obs_names.astype(str).to_numpy()[keep].tolist()
-    print(
-        f"ambidose: called {len(names)} cells (method={method}{extra})",
-        file=sys.stderr,
-    )
+    get_logger().info("ambidose: called %s cells (method=%s%s)", len(names), method, extra)
     if path is not None:
         out = Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1055,7 +1023,7 @@ def mark_doublets(
             sc.pp.scrublet(sub, **kw)
         except (ValueError, RuntimeError) as exc:
             status = "scrublet_error"
-            print(f"scrublet skipped ({n_cell} cells, {sub.n_vars} genes): {exc}")
+            get_logger().info("scrublet skipped (%s cells, %s genes): %s", n_cell, sub.n_vars, exc)
         else:
             status = "ok"
             scores[is_cell] = np.asarray(sub.obs["doublet_score"], dtype=np.float64)

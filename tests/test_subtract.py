@@ -122,6 +122,18 @@ def test_expand_take_sparse_cells_matches_full_length_formula():
     np.testing.assert_allclose(x_new.toarray(), x_old.toarray(), rtol=0, atol=1e-10)
 
 
+def test_soup_first_chi_moves_mass_off_confident_genes():
+    from ambidose._budget import _soup_first_chi
+
+    chi = np.array([0.7, 0.2, 0.1])
+    conf = np.array([1.0, 0.0, 0.5])
+    is_u = np.array([False, True, False])
+    out = _soup_first_chi(chi, conf, is_u)
+    assert out.sum() == pytest.approx(1.0)
+    assert out[0] == 0.0
+    assert out[1] > chi[1]
+
+
 def test_native_confidence_continuously_interpolates_removal():
     observed = np.full(3, 100.0)
     chi = np.full(3, 1.0 / 3.0)

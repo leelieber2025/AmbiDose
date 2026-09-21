@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import warnings
 
 import numpy as np
@@ -24,8 +23,10 @@ from ._budget import (
     _pre_enrich_sat_mask,
     _revoke_u_with_expressing_subset,
     _selected_data_positions,
+    _soup_first_chi,
 )
 from ._dose import (
+    _empty_cloud_knee_umi,
     _empty_consistent_rank1_budget,
     _native_everywhere_mask,
     _soup_just_above_empty,
@@ -34,7 +35,6 @@ from ._dose import (
     _u_mass_fits_empty_droplets,
     _unexpressed_mask,
 )
-from ._droplets import _empty_cloud_knee_umi
 from ._ownership import (
     _ceiling_cross_type_gate,
     _cross_type_anchor_mask,
@@ -65,6 +65,7 @@ from ._shared import (
     _validate_output_layer,
     _validated_sample_values,
     _validated_type_values,
+    get_logger,
 )
 from ._typing import _default_type_key
 
@@ -231,6 +232,7 @@ def subtract(
             sample_native: dict[str, list[int]] = {}
             sample_tiny = 0
             sample_empty_skip = 0
+            sample_layer2 = 0
             chi = _chi_for_obs(
                 adata,
                 sample_key=sample_key if s is not None else None,
@@ -248,7 +250,8 @@ def subtract(
                 if not rec and recs:
                     rec = next(iter(recs.values()))
                 lam_e = float(rec["lam_e"]) if rec.get("lam_e") is not None else 0.0
-                knee_e = lam_e
+                stored_knee = rec.get("knee_umi") if rec else None
+                knee_e = float(stored_knee) if stored_knee is not None else lam_e
             types_s_all = np.where(in_s, types, EMPTY_TYPE)
             type_names_s = list(pd.unique(types[in_s]))
             type_indices_s = {t: np.flatnonzero(in_s & (types == t)) for t in type_names_s}
@@ -440,9 +443,16 @@ def subtract(
                     if (not fits_empty) and _soup_just_above_empty(rho_t, n_bar_t, knee_e)
                     else 1.0
                 )
+                if protect_scale == 0.0 and not fits_empty:
+                    sample_layer2 += int(idx.size)
+                chi_take = (
+                    _soup_first_chi(chi, native_confidence, is_u)
+                    if protect_scale == 0.0 and not fits_empty
+                    else chi
+                )
                 take_rank1 = _confidence_weighted_take(
                     y_cl,
-                    chi,
+                    chi_take,
                     rank1_budget,
                     native_confidence,
                     None,
@@ -450,7 +460,7 @@ def subtract(
                 )
                 take_rank1 = np.where(is_u, 0.0, take_rank1)
                 if (not fits_empty) and is_u.any() and protect_scale < 1.0:
-                    u_chi = np.minimum(y_cl, rank1_budget * chi)
+                    u_chi = np.minimum(y_cl, rank1_budget * chi_take)
                     take_rank1 = np.where(is_u, (1.0 - protect_scale) * u_chi, take_rank1)
                 ambient_support = _ambient_slope_support(x, idx, n, chi, d_idx)
                 take_rank1 = _migrate_unspent_rank1(
@@ -522,15 +532,29 @@ def subtract(
                     separators=(",", ":"),
                 )
                 sample_native[group_key] = np.flatnonzero(is_p).tolist()
-            return sample_native, sample_n_meta, sample_tiny, sample_empty_skip
+            return (
+                sample_native,
+                sample_n_meta,
+                sample_tiny,
+                sample_empty_skip,
+                sample_layer2,
+                knee_e,
+            )
 
         sample_results = list(map(process_sample, groups))
         native_internal: dict[str, list[int]] = {}
         meta_groups_by_sample: dict[str, dict] = {}
         total_meta_groups = 0
-        for sample, (sample_native, sample_n_meta, sample_tiny, sample_empty_skip) in zip(
-            groups, sample_results, strict=True
-        ):
+        n_layer2 = 0
+        empty_umi = dict(adata.uns.get("ambidose", {}).get("empty_umi", {}))
+        for sample, (
+            sample_native,
+            sample_n_meta,
+            sample_tiny,
+            sample_empty_skip,
+            sample_layer2,
+            knee_e,
+        ) in zip(groups, sample_results, strict=True):
             native_internal.update(sample_native)
             sample_id = _sample_storage_id(None if sample is None else str(sample))
             meta_groups_by_sample[sample_id] = {
@@ -542,6 +566,12 @@ def subtract(
             total_meta_groups += sample_n_meta
             n_tiny_protected += sample_tiny
             n_empty_skip += sample_empty_skip
+            n_layer2 += sample_layer2
+            if np.isfinite(knee_e) and knee_e > 0:
+                rec = dict(empty_umi.get(sample_id, {}))
+                rec.setdefault("sample", "" if sample is None else str(sample))
+                rec["knee_umi"] = float(knee_e)
+                empty_umi[sample_id] = rec
         native_idx_by_type: dict[str, list[int]] = {}
         native_group_identity: dict[str, dict] = {}
         for i, identity_key in enumerate(sorted(native_internal)):
@@ -562,13 +592,15 @@ def subtract(
         uns["max_meta_groups_per_sample"] = int(n_meta_groups)
         uns["n_tiny_protected_cells"] = int(n_tiny_protected)
         uns["n_empty_consistent_skip_cells"] = int(n_empty_skip)
+        uns["n_low_soup_full_chi_cells"] = int(n_layer2)
+        uns["empty_umi"] = empty_umi
         adata.uns["ambidose"] = uns
         if n_tiny_protected:
-            print(
-                f"ambidose: {n_tiny_protected} cells in groups "
-                f"<{MIN_TYPE_CELLS} cells; extra-clear skipped "
+            get_logger().info(
+                "ambidose: %s cells in groups <%s cells; extra-clear skipped "
                 "(rank-1 protected take only)",
-                file=sys.stderr,
+                n_tiny_protected,
+                MIN_TYPE_CELLS,
             )
 
     if clip_negative:

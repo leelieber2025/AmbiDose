@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import sys
 import threading
@@ -52,6 +53,42 @@ EMPTY_TYPE = object()
 EMPTY_TYPES = frozenset({EMPTY_TYPE})
 
 
+class _LiveStderrHandler(logging.StreamHandler):
+    """A StreamHandler that always writes to the *current* ``sys.stderr``.
+
+    Plain ``logging.StreamHandler(sys.stderr)`` binds to whichever object
+    ``sys.stderr`` is at construction time. Since this handler is created
+    once and cached on the ``ambidose`` logger (below), that first binding
+    can outlive it -- e.g. under pytest, where ``capsys`` replaces
+    ``sys.stderr`` per test, an earlier test's handler creation would
+    otherwise leave later tests writing to a stream capsys is no longer
+    reading from.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+
+    @property
+    def stream(self):
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value):
+        pass
+
+
+def get_logger() -> logging.Logger:
+    """Package logger. Messages go to stderr so CLI stdout stays machine-readable."""
+    log = logging.getLogger("ambidose")
+    if not log.handlers:
+        handler = _LiveStderrHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+        log.propagate = False
+    return log
+
+
 class _StageProgress:
     """Elapsed-time reporting and a quiet heartbeat for long product stages."""
 
@@ -64,7 +101,7 @@ class _StageProgress:
 
     def __enter__(self):
         self.started = time.monotonic()
-        print(f"ambidose: {self.label}...", file=sys.stderr, flush=True)
+        get_logger().info("ambidose: %s...", self.label)
         self._thread = threading.Thread(target=self._heartbeat, daemon=True)
         self._thread.start()
         return self
@@ -72,11 +109,7 @@ class _StageProgress:
     def _heartbeat(self) -> None:
         while not self._stop.wait(self.heartbeat_seconds):
             elapsed = time.monotonic() - self.started
-            print(
-                f"ambidose: still {self.label} (elapsed {elapsed:.0f}s)...",
-                file=sys.stderr,
-                flush=True,
-            )
+            get_logger().info("ambidose: still %s (elapsed %.0fs)...", self.label, elapsed)
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self._stop.set()
@@ -84,11 +117,7 @@ class _StageProgress:
             self._thread.join()
         elapsed = time.monotonic() - self.started
         status = "completed" if exc_type is None else "failed"
-        print(
-            f"ambidose: {self.label} {status} in {elapsed:.1f}s",
-            file=sys.stderr,
-            flush=True,
-        )
+        get_logger().info("ambidose: %s %s in %.1fs", self.label, status, elapsed)
 
 
 def _reject_view(adata: AnnData, fname: str) -> None:

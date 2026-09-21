@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.11] - 2026-09-21
+
+### Changed
+
+- Inside the low-soup band (soup per cell within 3× the empty-cloud knee),
+  the rank-1 budget is spent on unexpressed and low-confidence genes
+  instead of in proportion to χ. High-confidence genes no longer take the
+  integer counts first.
+- The empty-cloud knee is now stored on `uns['ambidose']['empty_umi']` as
+  `knee_umi` when χ is estimated, instead of being recomputed on every
+  `subtract()` call. Cells routed through the low-soup band are counted in
+  `uns['ambidose']['n_low_soup_full_chi_cells']`.
+- Progress messages (e.g. the tiny-group extra-clear notice) go through
+  the `ambidose` logger instead of `print(..., file=sys.stderr)`.
+
+### Fixed
+
+- `get_logger()`'s handler now resolves `sys.stderr` at write time instead
+  of binding to it once when the handler is first created. The package
+  logger is a process-wide singleton, so the previous binding could
+  outlive whatever `sys.stderr` was current at that first call —
+  redirecting `sys.stderr` afterward (as test runners commonly do) would
+  not reach it.
+
 ## [0.5.10] - 2026-09-20
 
 ### Changed
@@ -10,7 +34,18 @@ All notable changes to this project are documented in this file.
   3× the empty-cloud UMI knee (barcode-rank knee of empties below the
   cell/debris inflection), rank-1 uses a full χ take (`protect_scale=0`)
   and U genes share that take. Skip/cap at true empty-consistent groups
-  is unchanged.
+  is unchanged. The knee is stored on `uns['ambidose']['empty_umi']` as
+  `knee_umi` when χ is estimated. Cells on that path are counted in
+  `n_low_soup_full_chi_cells`. Progress messages use the `ambidose` logger.
+
+### Fixed
+
+- `_native_profile_orthogonal_to_chi` moved from `scripts/run_zero_ambient_control_pbmc.py`
+  into `ambidose._dose`. The test covering it previously loaded that
+  script from disk by path, which fails wherever `scripts/` is not
+  present alongside `tests/` (it is intentionally excluded from the
+  distributed package). The test now imports the function directly from
+  `ambidose._dose`.
 
 ## [0.5.9] - 2026-09-20
 

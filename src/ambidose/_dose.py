@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import sys
 import warnings
 
 import numpy as np
@@ -28,6 +27,7 @@ from ._shared import (
     _sample_names,
     _sample_storage_id,
     _validated_type_values,
+    get_logger,
 )
 
 
@@ -255,6 +255,36 @@ def _soup_just_above_empty(
     if soup <= ceiling:
         return False
     return soup <= 3.0 * ceiling
+
+
+def _empty_cloud_knee_umi(totals: np.ndarray, empty_idx: np.ndarray) -> float:
+    """UMI knee of the empty cloud, not the cell-calling knee.
+
+    Restrict empties to below the library inflection (cell/debris cut),
+    then take the barcode-rank knee of that floor. The rank curve lives in
+    ``_droplets``; import it lazily so ``_droplets`` can import this module.
+    """
+    totals = np.asarray(totals, dtype=np.float64).ravel()
+    empty_idx = np.asarray(empty_idx, dtype=np.int64).ravel()
+    if empty_idx.size == 0:
+        return 0.0
+    empty_n = totals[empty_idx]
+    if empty_idx.size < 50:
+        return float(np.mean(empty_n))
+    from ._droplets import _barcode_rank_curve
+
+    curve = _barcode_rank_curve(totals, lower=0.0)
+    infl = curve["inflection_umi"]
+    if np.isfinite(infl) and infl > 0:
+        floor = empty_n[empty_n < infl]
+    else:
+        floor = empty_n
+    if floor.size < 50:
+        return float(np.percentile(empty_n, 95)) if empty_n.size else 0.0
+    knee = _barcode_rank_curve(floor, lower=0.0)["knee_umi"]
+    if not np.isfinite(knee) or knee <= 0:
+        return float(np.percentile(floor, 95))
+    return float(knee)
 
 
 def _empty_consistent_rank1_budget(
@@ -717,9 +747,7 @@ def estimate_dose(
         if fin.size == 0:
             rho[idx_all] = 0.0
             shrink_w[idx_all] = 0.0
-            print(
-                f"ambidose: no finite ρ_raw in sample {s_label!r}; dose set to 0", file=sys.stderr
-            )
+            get_logger().info("ambidose: no finite ρ_raw in sample %r; dose set to 0", s_label)
             diag_samples[sample_id] = {
                 "n_cell": int(idx_all.size),
                 "mu_log_rho": float("nan"),
