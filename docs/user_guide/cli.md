@@ -6,7 +6,7 @@
 ambidose denoise --input INPUT --output cleaned.h5ad
 ```
 
-`INPUT` may be a raw `.h5`, `.h5ad`, raw MTX directory, or Cell Ranger `outs/` directory. The matching Cell Ranger filtered barcodes are the default: when a sibling filtered matrix is found, its barcode list is used automatically.
+`INPUT` may be a raw `.h5`, `.h5ad`, raw MTX directory, or Cell Ranger `outs/` directory. Cells are the Cell Ranger filtered barcodes when a sibling filtered matrix is found. Pass `--cell-calling chi` only if that list is over-called.
 
 All `denoise` options:
 

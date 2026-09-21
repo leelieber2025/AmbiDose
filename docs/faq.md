@@ -27,6 +27,10 @@ For biological samples multiplexed in one GEM/library, their OCM assignments are
 
 Not to estimate $\chi$: filtered matrices normally discard the empty-droplet pool. You may denoise a cell-only AnnData only when it already carries a valid `ambidose_chi` estimated from the matching raw library.
 
+## What happens on a very clean library?
+
+If a type's unexpressed-unowned UMIs are compatible with empty droplets, or estimated soup per cell is no larger than the empty-droplet mean, extra-clear and leftover reallocation are skipped and rank-1 along $\chi$ is capped at that empty U-gene soup (low removal, not none). `uns["ambidose"]["n_empty_consistent_skip_cells"]` counts those cells. If soup per cell is above that skip but still within 3× the empty-cloud UMI knee (empties below the cell/debris inflection), rank-1 follows the full $\chi$ profile rather than native-protected take. Deep 10x libraries whose soup per cell is well above that knee are unchanged.
+
 ## Which matrix should I use?
 
 Raw integer UMI counts. Do not normalize, log-transform, scale, or select HVGs before denoising. The corrected matrix is written to a layer; perform standard Scanpy preprocessing afterward.
@@ -65,19 +69,21 @@ No. Every sample uses its own ambient profile, but AmbiDose does not align laten
 
 ## Why are some `rho` estimates high?
 
-Inspect `obs["ambidose_rho_trust"]` and the QC report (`write_report` / `--report`). These are run-state labels, not a calibrated probability that the cell was correctly corrected. A non-`ok` label means `ambidose_rho` should be interpreted cautiously; it is not a recommendation to discard the cell. `under_execution` means less than half of the $\chi$-direction dose $d_c$ was removed. `over_removal` means total removal exceeded $d_c$ by more than 5% or removed more than half of the cell UMI total; that ratio does not by itself prove native over-deletion. $d_c$ bounds the rank-1 take along $\chi$; high-$\chi$ soupOnly genes have a bounded 1.10× soft allowance by default, so total removal can modestly exceed $d_c$. Count monotonicity (`0 \le` corrected `\le` raw) is numerical conservatism, not a bound on native-molecule loss. Sample-level counts and explanations are stored in `uns["ambidose"]["trust"]`. Broadly expressed genes remain only partly identifiable; see {doc}`user_guide/method`.
+Inspect `obs["ambidose_rho_trust"]` and the QC report (`write_report` / `--report`). These are run-state labels, not a calibrated probability that the cell was correctly corrected. A non-`ok` label means `ambidose_rho` should be interpreted cautiously; it is not a recommendation to discard the cell. `under_execution` means less than half of the $\chi$-direction dose $d_c$ was removed. `over_removal` means total removal exceeded $d_c$ by more than 5% or removed more than half of the cell UMI total; that ratio does not by itself prove native over-deletion. $d_c$ bounds the rank-1 take along $\chi$; soupOnly extra-clear is limited to remaining $d_c$. Count monotonicity (`0 \le` corrected `\le` raw) is numerical conservatism, not a bound on native-molecule loss. Sample-level counts and explanations are stored in `uns["ambidose"]["trust"]`. Broadly expressed genes remain only partly identifiable; see {doc}`user_guide/method`.
 
 ## Must I pass cell barcodes to `denoise()`?
 
 Not in the usual Python call: `denoise(adata, raw=...)` uses `adata.obs_names` as the whitelist. You only need `cell_barcodes=` when you load the raw matrix yourself.
 
-Without `raw=`, `cell_barcodes`, an existing whitelist, or an explicit cell-calling mode, Python `denoise()` raises. The CLI resolves that case to `cell_calling="diem"`. Pass `cell_calling="diem"` in Python to obtain the CLI behavior. DIEM builds a three-component empty/debris/cell mixture whitelist and applies the first inflection only when the mixture call is inflated relative to the rank-curve cliff. To retain a Cell Ranger or external whitelist without refinement:
+Without `raw=`, `cell_barcodes`, an existing whitelist, or an explicit cell-calling mode, Python `denoise()` raises. The CLI resolves that case to `cell_calling="diem"`. Pass `cell_calling="diem"` in Python to obtain the CLI behavior. DIEM builds a three-component empty/debris/cell mixture whitelist and applies the first inflection only when the mixture call is inflated relative to the rank-curve cliff.
+
+A Cell Ranger filtered barcode list is used as cells, without trimming:
 
 ```python
-amdose.denoise(adata, cell_barcodes="filtered_barcodes.tsv", cell_calling="off")
+amdose.denoise(adata, cell_barcodes="filtered_barcodes.tsv")
 ```
 
-On the CLI, use `--cell-calling off --cell-barcodes ...`, or point `--input` to a Cell Ranger `outs/` directory and add `--cell-calling off`. The `chi` mode refines a provided list against empty-droplet χ. Do not truncate the list to chip capacity unless that cap is part of the intended cell-calling protocol.
+On the CLI, point `--input` to a Cell Ranger `outs/` directory, or pass `--cell-barcodes`. Use `--cell-calling chi` only if that list is over-called. Do not truncate the list to chip capacity unless that cap is part of the intended cell-calling protocol.
 
 `ordmag` / `force` remain as Cell Ranger step 1 / `--force-cells`. Empty droplets for χ stay in the SoupX UMI≤100 band; barcodes that fail the caller are `other`, not soup.
 

@@ -29,22 +29,22 @@ from ._dose import (
     _top_chi_indices as _top_chi_indices,
 )
 from ._dose import (
-    _two_component_mixture_em as _two_component_mixture_em,
-)
-from ._dose import (
-    _type_residual_score,
-)
-from ._dose import (
     diagnose_dose_disagreement as diagnose_dose_disagreement,
 )
 from ._dose import (
     estimate_dose as estimate_dose,
 )
 from ._dose import (
-    estimate_dose_mixture as estimate_dose_mixture,
-)
-from ._dose import (
     q_abs_scale as q_abs_scale,
+)
+from ._mixture import (
+    _two_component_mixture_em as _two_component_mixture_em,
+)
+from ._mixture import (
+    _type_residual_score,
+)
+from ._mixture import (
+    estimate_dose_mixture as estimate_dose_mixture,
 )
 from ._ownership import (
     _complete_linkage_labels as _complete_linkage_labels,
@@ -63,6 +63,7 @@ from ._shared import (
     SAMPLE_KEY_DEFAULT,
     _as_csr,
     _mc_worker_count,
+    _need,
     _reject_view,
     _require_raw_integer_counts,
     _stable_count_order,
@@ -166,8 +167,11 @@ def classify_droplets(
         n_wanted = len(wanted)
         if n_matched != n_wanted:
             raise ValueError(
-                f"{n_matched}/{n_wanted} cell_barcodes matched adata.obs_names; "
-                "every whitelist barcode must be present after normalization"
+                _need(
+                    f"{n_matched}/{n_wanted} filtered barcodes were found in this matrix.",
+                    "Input must be the Cell Ranger raw matrix. The filtered barcode "
+                    "list has to be from the same library.",
+                )
             )
         label[is_cell] = "cell"
         cap = 100 if empty_umi_max is None else empty_umi_max
@@ -378,6 +382,35 @@ def _closer_to_cells_than_chi(
 def _barcode_knee_umi(totals: np.ndarray, *, lower: float) -> float:
     """UMI at the barcode-rank knee (EmptyDrops always-retain)."""
     return _barcode_rank_curve(totals, lower=lower)["knee_umi"]
+
+
+def _empty_cloud_knee_umi(totals: np.ndarray, empty_idx: np.ndarray) -> float:
+    """UMI knee of the empty cloud, not the cell-calling knee.
+
+    Restrict empties to below the library inflection (cell/debris cut),
+    then take the barcode-rank knee of that floor. On 10x this is the
+    high-empty shoulder (~tens of UMI), not the mean of all empties
+    (dominated by zeros) and not the cell knee (thousands of UMI).
+    """
+    totals = np.asarray(totals, dtype=np.float64).ravel()
+    empty_idx = np.asarray(empty_idx, dtype=np.int64).ravel()
+    if empty_idx.size == 0:
+        return 0.0
+    empty_n = totals[empty_idx]
+    if empty_idx.size < 50:
+        return float(np.mean(empty_n))
+    curve = _barcode_rank_curve(totals, lower=0.0)
+    infl = curve["inflection_umi"]
+    if np.isfinite(infl) and infl > 0:
+        floor = empty_n[empty_n < infl]
+    else:
+        floor = empty_n
+    if floor.size < 50:
+        return float(np.percentile(empty_n, 95)) if empty_n.size else 0.0
+    knee = _barcode_rank_curve(floor, lower=0.0)["knee_umi"]
+    if not np.isfinite(knee) or knee <= 0:
+        return float(np.percentile(floor, 95))
+    return float(knee)
 
 
 def _ordmag_count(totals: np.ndarray, n_expect: int) -> tuple[int, float]:
@@ -808,8 +841,11 @@ def _cell_barcode_mask(adata: AnnData, cell_barcodes) -> np.ndarray:
     n_matched = int(is_cell.sum())
     if n_matched != len(wanted):
         raise ValueError(
-            f"{n_matched}/{len(wanted)} cell_barcodes matched adata.obs_names; "
-            "every whitelist barcode must be present after normalization"
+            _need(
+                f"{n_matched}/{len(wanted)} filtered barcodes were found in this matrix.",
+                "Input must be the Cell Ranger raw matrix. The filtered barcode "
+                "list has to be from the same library.",
+            )
         )
     return is_cell
 

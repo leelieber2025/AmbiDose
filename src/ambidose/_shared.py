@@ -33,86 +33,20 @@ TRUST_NOT_CELL = "not_cell"
 UNDER_EXECUTION_RATIO = 0.5
 OVER_EXECUTION_RATIO = 1.05
 OVER_REMOVAL_FRACTION = 0.5
-# remain_P / (n χ_P) at or below this looks like soup sitting on
-# protected native genes (χ is estimated from empty droplets).
-NATIVE_SOUP_RATIO = 1.25
-MIN_PROTECTED_CHI = 0.02
 SHRINK_K = 8.0
 MIN_GENES = 8
 MIN_VALID = 5
 MIN_TYPE_CELLS = 10
-# Exclusive ownership needs a gap over the runner-up meta/fragment.
-# Housekeeping and unowned injection genes sit at ~1x across groups;
-# a 1.8x lineage marker (CD3D-like) still clears 1.2x.
-OWNER_MIN_FOLD = 1.2
-# Standard-error margin (in SEs, each side) widening the OWNER_MIN_FOLD gap
-# test when per-group sampling noise is available. A candidate gap must
-# clear the fold even under this conservative reading of both group means,
-# not just their point estimates -- see _exclusive_owner_masks's docstring
-# for the GSE218853 case (Itm2b/Proximal_tubule) that motivated this: two
-# group means straddling the 1.2x line by less than their own standard
-# error is a coin flip, not a resolved ownership decision. z=1 is the
-# minimal margin that changes that specific decision without disturbing
-# any case in this codebase's existing owner-mask tests, all of which use
-# zero-variance fixtures (se=0 leaves the original point-estimate test
-# untouched).
 OWNER_GAP_SE_Z = 1.0
-# A fragment can only inherit its meta-group's ownership grant if its own
-# raw mean is within this fold of the meta-group's strongest individual
-# fragment. Meta-group merging (_split_noise_meta_ids) is intentionally
-# permissive on small/noisy clusters -- their split-half profile noise is
-# large, so complete-linkage can transitively pull a biologically distinct
-# cluster into the same meta-group as a real marker-expressing one. Without
-# this floor, ownership (and the unconditional native_confidence=1.0
-# protection it grants) spreads to every member regardless of whether that
-# member itself shows any of the signal, protecting off-target ambient
-# leakage from subtraction. Measured on real data: false-positive grants
-# (owning cluster's eval identity != the marker's documented owner, with
-# the true-owner type present and outranked in the same sample) were 1734/
-# 1925 on kidney and the dominant share of 4709 on fetal liver; the losing
-# fragment's own mean sat 16x-2600x below the true owner's mean in the
-# same meta-group. 10x keeps headroom for genuine same-identity variation
-# (the docstring case this was built for -- erythroid maturation stages an
-# order of magnitude apart) while excluding every measured false positive,
-# all of which start above 16x. See CHANGELOG.
-OWNER_FRAGMENT_MIN_SHARE_FOLD = 10.0
-# Smallest χ-mass prefix uses unique argmax ownership instead of the gap
-# cascade. Soup-dominant genes (hemoglobin in blood-rich samples) otherwise
-# get co-owned by every fragment in a merged meta-group. 0.15 was chosen on
-# fetal liver 200/stratum (on-target ≥0.95) and confirmed on the full
-# 114k-cell cohort: leak 0.0197→0.0148; the on-target drop is HBA1/HBA2 in
-# erythroid cells (99.98% of the UMI gap), not other lineage markers.
-# hgmm/Mixture/GSE147203 species-path scores are unchanged.
-CHI_MASS_SINGLE_WINNER = 0.15
-# EXPERIMENTAL (not wired into the frozen product path by default): a gene
-# ranks as "owned" by a meta-group if it's in that group's own top-K genes
-# by mean, regardless of how other groups compare -- lets biologically
-# shared markers (e.g. erythroid maturation fragments) be owned by
-# multiple groups at once instead of one cross-group magnitude winner.
-OWNER_TOP_K = 50
-# NOT WIRED IN (tried and rejected, kept as a documented negative result --
-# see CHANGELOG). Was meant to cap how much extra a single gene can absorb
-# from _realloc_unspent_rank1's leftover pool, as a multiple of that gene's
-# own base rank-1 share (dose*chi_g). Rejected: on real kidney data the
-# "legitimate" (must-win-needed) and "harmful" (kidney/fetal-liver
-# over-correcting) realloc multiples occupy the same numeric range (median
-# 2.96x, p90 5.76x across ~400k real events), so no fold threshold
-# separates them -- _realloc_unspent_rank1's actual fix uses a structural
-# `leftover_cap` (frozen single-winner ownership's own leftover) instead.
-REALLOC_CAP_FOLD = 5.0
-# Apply first-inflection only when the 3-component mixture is inflated
-# relative to the rank-curve cliff (debris-heavy libraries). Below this
-# the mixture's second mode is kept (heterogeneous high-RNA heads).
+# Use first-inflection only if the 3-component mixture is this inflated
+# relative to the barcode-rank cliff.
 MIX_INFLATION_RATIO = 2.5
-# Three-tier label-free Leiden resolution, keyed off scFair's estimated
-# population count. Coarse / medium / fine are 0.08 / 0.2 / 0.35.
 LEIDEN_RESOLUTION_COARSE = 0.08
 LEIDEN_RESOLUTION_MEDIUM = 0.2
 LEIDEN_RESOLUTION_FINE = 0.35
 MEDIUM_N_DENSITY_POPS = 12
 FINE_N_DENSITY_POPS = 20
-# Coarse-typing speed trial. Off below this many cells even if requested;
-# the shortcuts change the graph, so small libraries keep the default path.
+# Label-free typing shortcuts apply only at or above this many cells.
 TYPING_FAST_N_CELLS = 20_000
 EMPTY_TYPE = object()
 EMPTY_TYPES = frozenset({EMPTY_TYPE})
@@ -243,6 +177,11 @@ def _same_matrix(left, right) -> bool:
     a = _as_csr(left)
     b = _as_csr(right)
     return a.shape == b.shape and (a != b).nnz == 0
+
+
+def _need(problem: str, action: str) -> str:
+    """ValueError text: what failed, then what to do."""
+    return f"{problem.rstrip()} {action.strip()}"
 
 
 def _validated_group_values(
@@ -618,3 +557,17 @@ def _validate_chi_frame(adata: AnnData, sample_key: str) -> pd.DataFrame:
     for sample, row in aligned.iterrows():
         _validate_chi_vector(row.to_numpy(), adata.n_vars, where=f"χ for sample {sample!r}")
     return aligned
+
+
+def _feature_keys(adata: AnnData, *, where: str) -> list[str]:
+    if "gene_ids" in adata.var.columns:
+        ids = adata.var["gene_ids"]
+        if ids.isna().any() or ids.astype(str).duplicated().any():
+            raise ValueError(f"{where}: var['gene_ids'] must be complete and unique")
+        return ids.astype(str).tolist()
+    if not adata.var_names.is_unique:
+        raise ValueError(
+            f"{where}: duplicated var_names cannot be aligned safely without a "
+            "complete, unique var['gene_ids'] column"
+        )
+    return adata.var_names.astype(str).tolist()

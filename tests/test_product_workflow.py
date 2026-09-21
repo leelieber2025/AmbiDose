@@ -43,15 +43,37 @@ def test_denoise_passes_empty_umi_max_to_call_cells_lower(monkeypatch):
         seen_lower.append(kwargs.get("lower"))
         return real_call_cells(*args, **kwargs)
 
-    monkeypatch.setattr("ambidose.pp.call_cells", spy)
+    monkeypatch.setattr("ambidose._denoise.call_cells", spy)
     amdose.denoise(
         adata,
         cell_barcodes=cells,
+        cell_calling="chi",
         empty_umi_max=50,
         type_key="cell_type",
         sample_key=None,
     )
     assert seen_lower == [50]
+
+
+def test_denoise_default_trusts_filtered_barcodes(monkeypatch):
+    adata = make_toy(n_samples=1, n_empty=40, n_cells=12, seed=31)
+    cells = adata.obs_names[adata.obs["droplet"].astype(str) == "cell"].tolist()
+    seen = []
+
+    def spy(*args, **kwargs):
+        seen.append(True)
+        raise AssertionError("call_cells should not run when using the 10x filter")
+
+    monkeypatch.setattr("ambidose._denoise.call_cells", spy)
+    amdose.denoise(
+        adata,
+        cell_barcodes=cells,
+        type_key="cell_type",
+        sample_key=None,
+    )
+    assert seen == []
+    assert adata.uns["ambidose"]["cell_calling"]["method"] == "off"
+    assert int((adata.obs["ambidose_droplet"].astype(str) == "cell").sum()) == len(cells)
 
 
 def test_analysis_ready_uses_stored_droplet_and_layer_keys():
@@ -318,7 +340,7 @@ def test_denoise_cells_only_without_chi_raises():
 def test_estimate_chi_few_empties_raises():
     adata = make_toy(n_samples=1, n_empty=5, n_cells=20, seed=9)
     adata.obs[DROPLET_KEY] = adata.obs["droplet"]
-    with pytest.raises(ValueError, match="need at least 10 empty"):
+    with pytest.raises(ValueError, match="at least 10 empty"):
         amdose.estimate_chi(adata, sample_key=None)
 
 
@@ -546,7 +568,7 @@ def test_cli_manifest_uses_per_library_whitelists(tmp_path):
     assert set(result.obs["sample"].astype(str)) == {"L1", "L2"}
 
 
-def test_cli_manifest_default_refines_whitelist_off_trusts_it(tmp_path):
+def test_cli_manifest_default_trusts_filtered_list_chi_trims_it(tmp_path):
     adata = make_toy(n_samples=1, n_empty=40, n_cells=12, seed=31)
     cells = adata.obs_names[adata.obs["droplet"].astype(str) == "cell"].tolist()
     empties = adata.obs_names[adata.obs["droplet"].astype(str) == "empty"].tolist()
@@ -574,11 +596,9 @@ def test_cli_manifest_default_refines_whitelist_off_trusts_it(tmp_path):
         )
         == 0
     )
-    # Whitelist refinement against empty-droplet chi is on by default (no
-    # --cell-calling needed) -- the soup-like barcodes get dropped.
-    n_refined = sc.read_h5ad(refined).n_obs
-    assert n_refined < len(inflated)
-    assert n_refined >= len(cells) - 2
+    # Default uses the filtered list as-is (including soup-like barcodes).
+    n_default = sc.read_h5ad(refined).n_obs
+    assert n_default == len(inflated)
 
     trusted = tmp_path / "trusted.h5ad"
     assert (
@@ -590,7 +610,7 @@ def test_cli_manifest_default_refines_whitelist_off_trusts_it(tmp_path):
                 "--type-key",
                 "cell_type",
                 "--cell-calling",
-                "off",
+                "chi",
                 "--cells-only",
                 "--output",
                 str(trusted),
@@ -598,12 +618,12 @@ def test_cli_manifest_default_refines_whitelist_off_trusts_it(tmp_path):
         )
         == 0
     )
-    # --cell-calling off is the only way to trust the manifest whitelist
-    # as-is -- the soup-like barcodes stay in.
-    assert sc.read_h5ad(trusted).n_obs == len(inflated)
+    n_trimmed = sc.read_h5ad(trusted).n_obs
+    assert n_trimmed < len(inflated)
+    assert n_trimmed >= len(cells) - 2
 
 
-def test_denoise_cli_input_auto_detected_whitelist_refined_by_default(tmp_path):
+def test_denoise_cli_input_auto_detected_whitelist_trusted_by_default(tmp_path):
     from ambidose.io import write_10x_mtx
 
     adata = make_toy(n_samples=1, n_empty=40, n_cells=12, seed=33)
@@ -631,14 +651,8 @@ def test_denoise_cli_input_auto_detected_whitelist_refined_by_default(tmp_path):
         )
         == 0
     )
-    # Auto-detected Cell Ranger filtered barcodes are refined against
-    # empty-droplet chi by default -- previously the default ('diem')
-    # discarded them entirely and ran the from-scratch mixture model
-    # instead (auto-detected barcodes only got used when --cell-calling
-    # chi was passed explicitly).
-    n_refined = sc.read_h5ad(refined).n_obs
-    assert n_refined < len(inflated)
-    assert n_refined >= len(cells) - 2
+    n_default = sc.read_h5ad(refined).n_obs
+    assert n_default == len(inflated)
 
     trusted = tmp_path / "trusted.h5ad"
     assert (
@@ -648,7 +662,7 @@ def test_denoise_cli_input_auto_detected_whitelist_refined_by_default(tmp_path):
                 "--input",
                 str(raw_dir),
                 "--cell-calling",
-                "off",
+                "chi",
                 "--cells-only",
                 "--output",
                 str(trusted),
@@ -656,9 +670,9 @@ def test_denoise_cli_input_auto_detected_whitelist_refined_by_default(tmp_path):
         )
         == 0
     )
-    # --cell-calling off is the only way to trust the auto-detected
-    # Cell Ranger whitelist as-is.
-    assert sc.read_h5ad(trusted).n_obs == len(inflated)
+    n_trimmed = sc.read_h5ad(trusted).n_obs
+    assert n_trimmed < len(inflated)
+    assert n_trimmed >= len(cells) - 2
 
 
 def test_coarse_leiden_resolution_is_locked():
@@ -1052,7 +1066,7 @@ def test_multisample_denoise_rejects_global_chi():
     adata = make_toy(n_samples=2, n_empty=20, n_cells=10, seed=92)
     adata.obs[DROPLET_KEY] = adata.obs["droplet"]
     amdose.estimate_chi(adata, sample_key=None)
-    with pytest.raises(ValueError, match="sample-specific profiles"):
+    with pytest.raises(ValueError, match="per-library"):
         amdose.denoise(adata, sample_key="sample", type_key="cell_type")
 
 
@@ -1108,10 +1122,11 @@ def test_denoise_passes_n_jobs_to_cell_calling(monkeypatch):
         seen["n_jobs"] = kwargs.get("n_jobs")
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(amdose.pp, "call_cells", wrapped)
+    monkeypatch.setattr("ambidose._denoise.call_cells", wrapped)
     amdose.denoise(
         adata,
         cell_barcodes=cells,
+        cell_calling="chi",
         sample_key=None,
         type_key="cell_type",
         n_jobs=1,
@@ -1371,7 +1386,7 @@ def test_raw_mode_uses_internal_sentinel_for_noncell_types(monkeypatch):
         seen.extend(target.obs.loc[noncell, "cell_type"].tolist())
         return original(target, **kwargs)
 
-    monkeypatch.setattr(pp, "estimate_dose_adaptive", capture)
+    monkeypatch.setattr("ambidose._denoise.estimate_dose_adaptive", capture)
     amdose.denoise(filtered, raw=raw, type_key="cell_type", sample_key=None)
     assert seen
     assert all(value is EMPTY_TYPE for value in seen)

@@ -2,6 +2,119 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.10] - 2026-09-20
+
+### Changed
+
+- When a type is not empty-consistent but soup per cell is still within
+  3× the empty-cloud UMI knee (barcode-rank knee of empties below the
+  cell/debris inflection), rank-1 uses a full χ take (`protect_scale=0`)
+  and U genes share that take. Skip/cap at true empty-consistent groups
+  is unchanged.
+
+## [0.5.9] - 2026-09-20
+
+### Changed
+
+- Zero-ambient PBMC4k control (`scripts/run_zero_ambient_control_pbmc.py`)
+  simulates cells from a native profile orthogonal to empty-droplet χ
+  (`type_mean ≈ α χ + native`), not from the raw 10x type mean. Empties
+  stay real. Pass `--no-orthogonalize` for the old design.
+
+## [0.5.8] - 2026-09-20
+
+### Changed
+
+- Extra-clear and leftover realloc are skipped, and rank-1 is capped at
+  empty U-gene soup, when a type's unexpressed-unowned mass matches empty
+  droplets, estimated soup per cell is not above the empty mean, or
+  unexpressed genes owned by *other* types match empty (no extra
+  cross-type soup). That last check is the data feature that separates
+  clean cells from barnyard off-species. Affected cells are counted in
+  `uns["ambidose"]["n_empty_consistent_skip_cells"]`.
+
+### Fixed
+
+- SoupOnly extra-clear no longer splits unexpressed-unowned (U) genes into
+  a "high-χ" and "low-χ" group before capping them at the remaining
+  `d_c`. That split was left over from 0.5.6's change to cover the full χ
+  mass (`SOUP_ONLY_CHI_MASS = 1.0`): every U gene with nonzero χ already
+  fell in the "high" group, so only a gene with exactly zero χ (an edge
+  case) ever reached the "low" group, where it additionally received a
+  dose-correlation reweighting no other U gene gets. All U genes now go
+  through the same single capping path. No change for any gene with
+  nonzero χ.
+
+## [0.5.7] - 2026-09-19
+
+### Changed
+
+- `denoise()` and the CLI now use a Cell Ranger filtered barcode list as
+  cells as-is by default (explicit `--cell-barcodes`, auto-detected
+  `filtered_*`, or a manifest/root library). Previously that list was
+  refined against ambient χ by default. Pass `cell_calling='chi'`
+  (`--cell-calling chi`) to trim it against soup instead;
+  `cell_calling='off'` remains equivalent to the new default.
+  `'diem'` / `'emptydrops'` / `expect_cells` are unchanged and only apply
+  when no filtered list is available.
+- Error messages for missing empty droplets, an unmatched barcode list,
+  and dose/χ or subtract/dose provenance mismatches now state the problem
+  and what to pass next, instead of a single terse sentence. Exact
+  message text changed; code matching on the old wording should match on
+  the new wording instead.
+
+## [0.5.6] - 2026-09-18
+
+Several dose, ownership, and soupOnly thresholds that were fixed constants
+fitted on a small number of evaluation panels are now computed from each
+sample's own data, or dropped where the fixed value added nothing beyond
+an existing bound.
+
+### Changed
+
+- `estimate_dose_adaptive()` no longer rescales the selected ρ by a fixed
+  piecewise curve `s(q)`. Executed dose is the selected estimator directly.
+  Per-sample `q = median(ρ̂) n̄ / λ_e` is still recorded as a diagnostic.
+- The adaptive dose estimator switches from the fixed to the mixture
+  estimate when their disagreement exceeds the Poisson sampling error of
+  the two estimates, instead of a fixed fold/gap threshold.
+- SoupOnly extra-clear now covers the full χ mass of unexpressed-unowned
+  (U) genes, not a fixed 80% prefix, and is capped by default at the
+  remaining `d_c` after rank-1 with no soft allowance beyond it
+  (`high_u_remaining_multiplier` default is now `1.0`, was `1.10`).
+- SoupOnly extra-clear eligibility is now a per-gene test (is this type's
+  mean compatible with that type's own ρ, under a Poisson sampling
+  margin) instead of a single fixed cross-type ratio cutoff.
+- Exclusive gene ownership is now decided by comparing each candidate's
+  conservative mean (point estimate minus its sampling error) against the
+  runner-up, instead of requiring a fixed fold-change margin. Housekeeping
+  ties stay unowned.
+- High-χ unique-argmax ownership uses the Lorenz-curve knee of the
+  sample's own χ to decide single-winner eligibility, instead of a fixed
+  χ-mass threshold.
+- A merged fragment now inherits its meta-group's ownership only when it
+  is the sole member of that group or its own mean still exceeds every
+  other meta-group's mean, instead of a fixed minimum-share threshold.
+- Several dose defaults are now derived from the sample instead of fixed:
+  the χ prefix used for evidence genes is the sample's own Lorenz knee,
+  the ratio floor is calibrated so empty droplets land at a median ρ̂ of
+  about 1, and the unexpressed-gene mean floor is the sample's own
+  Poisson-expected value rather than a fixed UMI count.
+- Dose log-ρ shrinkage now uses each sample's own median evidence
+  (valid-gene count or exposure) as the shrinkage weight, instead of a
+  fixed constant.
+- The opt-in `relax_hk_when_soup_like` test now uses a Poisson ceiling on
+  leftover native mass versus the empty-droplet χ, run whenever expected
+  soup on that gene is at least 1 UMI, instead of two fixed thresholds.
+
+### Removed
+
+- The global soupOnly ρ floor: extra-clear eligibility is already bounded
+  by the remaining `d_c` and by the per-gene type-ρ-compatibility test
+  above, so the separate floor was redundant.
+- Unused `REALLOC_CAP_FOLD`, `_topk_owner_masks`, and `OWNER_TOP_K` (dead
+  code, not reachable from the product path).
+
 ## [0.5.5] - 2026-09-17
 
 ### Changed

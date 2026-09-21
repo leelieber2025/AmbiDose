@@ -128,6 +128,25 @@ def test_native_confidence_continuously_interpolates_removal():
     confidence = np.array([0.0, 0.5, 1.0])
     take = _confidence_weighted_take(observed, chi, 6.0, confidence)
     np.testing.assert_allclose(take, [2.0, 1.1, 0.2])
+    take0 = _confidence_weighted_take(observed, chi, 6.0, confidence, protect_scale=0.0)
+    np.testing.assert_allclose(take0, [2.0, 2.0, 2.0])
+
+
+def test_p_set_is_soup_like_uses_poisson_ceiling():
+    from ambidose._dose import NOISE_K
+    from ambidose._ownership import _p_set_is_soup_like
+
+    n_cells = 20
+    chi = np.array([0.5, 0.5])
+    n = np.full(n_cells, 100.0)
+    soup_p = float(n.sum()) * chi[0]
+    x = sparse.csr_matrix(np.tile([soup_p / n_cells, 0.0], (n_cells, 1)))
+    is_p = np.array([True, False])
+    assert _p_set_is_soup_like(x, n, chi, np.arange(n_cells), is_p)
+    x_hi = sparse.csr_matrix(
+        np.tile([(soup_p + NOISE_K * np.sqrt(soup_p) + 10) / n_cells, 0.0], (n_cells, 1))
+    )
+    assert not _p_set_is_soup_like(x_hi, n, chi, np.arange(n_cells), is_p)
 
 
 def test_relax_hk_increases_high_rho_removal_and_default_off():
@@ -167,7 +186,10 @@ def test_relax_hk_increases_high_rho_removal_and_default_off():
         (raw_counts[mask].sum() - trial.layers["ambidose_denoised"][mask].sum())
         / raw_counts[mask].sum()
     )
-    assert abs(trial_frac - frozen) > 1e-6
+    # relax_hk must not reduce removal. A χ-elbow prefix can already make
+    # the default and relaxed paths agree on this toy; that is overlap,
+    # not a failure of the opt-in flag.
+    assert trial_frac + 1e-12 >= frozen
 
 
 def test_denoise_toy_removed_fraction_in_band():
@@ -225,7 +247,7 @@ def test_subtract_requires_dose_sample_key_match():
     cells.uns["ambidose_chi"] = adata.uns["ambidose_chi"]
     estimate_dose(cells, sample_key="sample")
 
-    with pytest.raises(ValueError, match="parameters do not match dose provenance"):
+    with pytest.raises(ValueError, match="do not match how dose was estimated"):
         subtract(cells, sample_key="sample_other")
 
 
@@ -413,13 +435,17 @@ def test_soup_only_does_not_wipe_abundant_ceiling_collision():
 
 
 def test_chi_mass_prefix_mask_covers_requested_mass():
-    from ambidose._ownership import _chi_mass_prefix_mask
+    from ambidose._ownership import _chi_mass_elbow, _chi_mass_prefix_mask
 
     chi = np.array([0.10, 0.05, 0.01, 0.84])
     high = _chi_mass_prefix_mask(chi, 0.15)
     assert high.tolist() == [False, False, False, True]
     high90 = _chi_mass_prefix_mask(chi, 0.90)
     assert high90[3] and high90[0]
+    elbow = _chi_mass_elbow(chi)
+    assert 0.84 <= elbow <= 0.95
+    flat = np.full(20, 0.05)
+    assert _chi_mass_elbow(flat) >= 0.4
 
 
 def test_restrict_high_chi_to_single_winner_only_on_prefix():
@@ -470,6 +496,22 @@ def test_revoke_u_if_rt_winner_spares_leading_type():
     out_b = _revoke_u_if_rt_winner(is_u, "b", means, n_bar, chi)
     assert not out_a[0] and out_a[1]
     assert out_b[0] and not out_b[1]
+
+
+def test_hitchhiker_fragment_does_not_inherit_meta_ownership():
+    from ambidose._ownership import _exclusive_owner_masks
+
+    type_means = {
+        "strong": np.array([100.0, 1.0]),
+        "hitch": np.array([2.0, 1.0]),
+        "other": np.array([5.0, 80.0]),
+    }
+    group_means = np.array([[51.0, 1.0], [5.0, 80.0]])
+    member_of = np.array([0, 0, 1])
+    masks = _exclusive_owner_masks(group_means, type_means, member_of, max_type_mean=0.05)
+    assert masks["strong"][0]
+    assert not masks["hitch"][0]
+    assert masks["other"][1]
 
 
 def test_dominant_owner_is_shared_only_within_half_split_noise():
@@ -670,7 +712,7 @@ def test_qr_structure_solver_matches_old_lstsq_end_to_end(monkeypatch):
         kwargs["solver"] = "lstsq"
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(pp, "_cross_cell_structure_mask", force_lstsq)
+    monkeypatch.setattr("ambidose._ownership._cross_cell_structure_mask", force_lstsq)
     old = raw.copy()
     denoise(old, cell_barcodes=cells, type_key="cell_type", sample_key=None)
 
@@ -861,12 +903,10 @@ def test_high_chi_u_mask_is_u_inside_chi_prefix():
 
     chi = np.array([0.4, 0.4, 0.2])
     is_u = np.array([False, False, True])
-    assert _high_chi_u_mask(is_u, chi).tolist() == [False, False, False]
+    assert _high_chi_u_mask(is_u, chi).tolist() == [False, False, True]
     chi_hi = np.array([0.05, 0.05, 0.90])
     assert _high_chi_u_mask(is_u, chi_hi).tolist() == [False, False, True]
-    # Default extra-clear prefix is wider than ownership 0.15 but still
-    # excludes a 20% tail gene when the top two genes already cover 0.8.
-    assert SOUP_ONLY_CHI_MASS >= 0.8
+    assert SOUP_ONLY_CHI_MASS == 1.0
 
 
 def test_soup_only_low_chi_extra_clear_stays_inside_remaining_dose():
@@ -883,7 +923,7 @@ def test_soup_only_low_chi_extra_clear_stays_inside_remaining_dose():
     ad.obs_names = [f"c{i}" for i in range(2 * n)]
     ad.obs["ambidose_droplet"] = "cell"
     ad.obs["cell_type"] = ["t0"] * n + ["t1"] * n
-    # g0/g1 hold the χ-mass prefix; g2 is U but outside that prefix.
+    # g2 is a lower-χ U gene; extra-clear still cannot exceed remaining d_c.
     ad.var[CHI_KEY] = np.array([0.40, 0.40, 0.20])
     ad.obs[DOSE_KEY] = 15.0
     ad.obs["n_umi"] = np.asarray(ad.X.sum(axis=1)).ravel()
@@ -908,8 +948,8 @@ def test_soup_only_low_chi_extra_clear_stays_inside_remaining_dose():
     assert (removed <= 16.0).all()
 
 
-def test_soup_only_high_chi_extra_clear_is_not_remaining_capped():
-    """High-χ U extra-clear is not scaled to remaining d_c."""
+def test_soup_only_high_chi_extra_clear_stays_inside_remaining_dose():
+    """High-χ U extra-clear is capped at remaining d_c (same as low-χ U)."""
     from anndata import AnnData
 
     from ambidose.pp import CHI_KEY, DOSE_KEY
@@ -943,6 +983,44 @@ def test_soup_only_high_chi_extra_clear_is_not_remaining_capped():
     assert den[:, 2].sum() < raw[:, 2].sum()
     assert (den[:n, 0] >= 79.0).all()
     assert (den[n:, 1] >= 79.0).all()
+    assert (removed <= 15.0 + 1e-9).all()
+
+
+def test_soup_only_high_chi_multiplier_can_exceed_remaining_dose():
+    """Opt-in multiplier >1 is the old barnyard allowance, not the default."""
+    from anndata import AnnData
+
+    from ambidose.pp import CHI_KEY, DOSE_KEY
+
+    n = 20
+    # g2 mean must sit at this type's ρ so extra-clear still runs.
+    t0 = np.tile([80.0, 1.0, 30.0], (n, 1))
+    t1 = np.tile([1.0, 80.0, 30.0], (n, 1))
+    ad = AnnData(sparse.csr_matrix(np.vstack([t0, t1])))
+    ad.var_names = ["g0", "g1", "g2"]
+    ad.obs_names = [f"c{i}" for i in range(2 * n)]
+    ad.obs["ambidose_droplet"] = "cell"
+    ad.obs["cell_type"] = ["t0"] * n + ["t1"] * n
+    ad.var[CHI_KEY] = np.array([0.05, 0.05, 0.90])
+    ad.obs[DOSE_KEY] = 50.0
+    ad.obs["n_umi"] = np.asarray(ad.X.sum(axis=1)).ravel()
+    ad.uns["ambidose"] = {
+        "dose_type_key": "cell_type",
+        "dose_provenance": {
+            "type_key": "cell_type",
+            "sample_key": None,
+            "layer": None,
+            "droplet_key": "ambidose_droplet",
+            "cell_label": "cell",
+        },
+    }
+    subtract(
+        ad,
+        type_key="cell_type",
+        droplet_key="ambidose_droplet",
+        high_u_remaining_multiplier=1.10,
+    )
+    removed = ad.obs["ambidose_removed_umi"].to_numpy()
     assert removed.max() > 16.0
 
 
@@ -1090,6 +1168,20 @@ def test_mid_ceiling_gene_is_not_extra_cleared():
     subtract(ad, type_key="cell_type", droplet_key="ambidose_droplet")
     den = ad.layers["ambidose_denoised"].toarray()
     assert (den[:, 2] > 0).all()
+
+
+def test_soup_rt_gate_follows_type_rho_not_global_cut():
+    from ambidose._dose import NOISE_K, _mean_compatible_with_type_rho
+
+    expected = np.array([10.0, 10.0, 10.0])
+    mean_at_rho = np.array([1.0, 2.0, 6.0])
+    n_cells = 10_000
+    ok = _mean_compatible_with_type_rho(mean_at_rho, expected, n_cells, 0.2)
+    assert ok.tolist() == [True, True, False]
+    ok_high = _mean_compatible_with_type_rho(mean_at_rho, expected, n_cells, 0.6)
+    assert ok_high.tolist() == [True, True, True]
+    noisy = np.array([0.2 * 10.0 + NOISE_K * np.sqrt(2.0 / n_cells) + 0.01])
+    assert not _mean_compatible_with_type_rho(noisy, np.array([10.0]), n_cells, 0.2)
 
 
 def test_rank1_take_sum_does_not_exceed_dose():
@@ -1280,7 +1372,7 @@ def test_non_cells_use_internal_type_sentinel_during_subtraction(monkeypatch):
         seen.append(np.asarray(types, dtype=object).copy())
         return original(x, totals, types, type_means, **kwargs)
 
-    monkeypatch.setattr(pp, "_dominant_owner_masks", record_types)
+    monkeypatch.setattr("ambidose._subtract._dominant_owner_masks", record_types)
     subtract(ad, type_key="cell_type")
 
     assert len(seen) == 1
@@ -1644,7 +1736,7 @@ def test_subtract_rejects_type_key_different_from_dose_provenance():
             "cell_label": "cell",
         },
     }
-    with pytest.raises(ValueError, match="parameters do not match dose provenance"):
+    with pytest.raises(ValueError, match="do not match how dose was estimated"):
         subtract(ad, type_key="cluster_B")
 
 

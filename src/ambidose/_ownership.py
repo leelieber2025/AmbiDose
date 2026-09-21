@@ -10,18 +10,19 @@ import numpy as np
 import pandas as pd
 from scipy.special import ndtr
 
-from ._dose import SOUP_ONLY_MAX_RT, U_MAX_LIBRARY_FRAC, _top_chi_indices, _unexpressed_mask
+from ._dose import (
+    NOISE_K,
+    U_MAX_LIBRARY_FRAC,
+    _expression_floor,
+    _mean_compatible_with_type_rho,
+    _top_chi_indices,
+    _unexpressed_mask,
+)
 from ._shared import (
     _DENSE_WORKSPACE_RAM_FRACTION,
-    CHI_MASS_SINGLE_WINNER,
     EMPTY_TYPES,
-    MIN_PROTECTED_CHI,
     MIN_TYPE_CELLS,
-    NATIVE_SOUP_RATIO,
-    OWNER_FRAGMENT_MIN_SHARE_FOLD,
     OWNER_GAP_SE_Z,
-    OWNER_MIN_FOLD,
-    OWNER_TOP_K,
     _available_ram_bytes,
     _dense_chunk_columns,
     _require_ram,
@@ -31,7 +32,21 @@ from ._shared import (
 _MT_GENE_RE = re.compile(r"(^|_)mt[-_]", re.IGNORECASE)
 
 
-def _chi_mass_prefix_mask(chi: np.ndarray, mass: float = CHI_MASS_SINGLE_WINNER) -> np.ndarray:
+def _chi_mass_elbow(chi: np.ndarray) -> float:
+    """χ-mass at the Lorenz-curve knee versus a uniform gene share."""
+    chi = np.asarray(chi, dtype=np.float64)
+    if chi.size == 0:
+        return 1.0
+    order = np.argsort(-chi)
+    total = float(chi[order].sum())
+    if total <= 0:
+        return 1.0
+    c = np.cumsum(chi[order]) / total
+    x = np.arange(1, c.size + 1, dtype=np.float64) / c.size
+    return float(c[int(np.argmax(c - x))])
+
+
+def _chi_mass_prefix_mask(chi: np.ndarray, mass: float) -> np.ndarray:
     """True on the smallest χ-sorted prefix whose mass is at least ``mass``."""
     chi = np.asarray(chi, dtype=np.float64)
     high = np.zeros(chi.size, dtype=bool)
@@ -51,9 +66,11 @@ def _restrict_high_chi_to_single_winner(
     masks_sw: dict[str, np.ndarray],
     chi: np.ndarray,
     *,
-    mass: float = CHI_MASS_SINGLE_WINNER,
+    mass: float | None = None,
 ) -> dict[str, np.ndarray]:
     """Gap-cascade ownership, except soup-mass genes use unique argmax."""
+    if mass is None:
+        mass = _chi_mass_elbow(chi)
     high = _chi_mass_prefix_mask(chi, mass)
     if not high.any():
         return masks
@@ -68,13 +85,9 @@ def _strip_ambient_level_owners(
     *,
     rt_win: float = 1.0,
 ) -> dict[str, np.ndarray]:
-    """Drop ownership when this type's r_t ≤ 1, but only if a real winner exists.
+    """Drop ownership when this type's r_t ≤ 1 and another type has r_t > 1.
 
-    r_t = mean/(n̄ χ). A type with r_t ≤ 1 is still ambient-ceiling on that
-    gene. If some other type in the sample has r_t > 1, that type is the
-    expressor and ambient-level types must not inherit protection (kidney
-    Hb in non-erythroid). If no type clears r_t > 1, leave ownership
-    unchanged (species fragments on barnyards).
+    r_t = mean / (n̄ χ). If no type exceeds 1, leave masks unchanged.
     """
     names = [t for t in masks if t in type_means]
     if len(names) == 0:
@@ -102,17 +115,8 @@ def _revoke_u_if_rt_winner(
     type_means: dict[str, np.ndarray],
     n_bar_by_type: dict[str, float],
     chi: np.ndarray,
-    *,
-    fold: float = OWNER_MIN_FOLD,
 ) -> np.ndarray:
-    """Do not soupOnly a gene this type uniquely leads on r_t.
-
-    High-χ identity can sit below SOUP_ONLY_MAX_RT=0.4 (mean < 0.4 n̄χ)
-    and still be extra-cleared in its owner type. If this type is the
-    exclusive r_t argmax, it is the expressor and must not extra-clear.
-    Needs ≥2 types; a lone type is left unchanged. r_t>1 is not required:
-    that case is already excluded from U by the 0.4 cap.
-    """
+    """Do not extra-clear a gene this type uniquely leads on r_t."""
     names = [t for t in type_means if t in n_bar_by_type]
     if len(names) < 2 or type_name not in names:
         return is_u
@@ -127,7 +131,7 @@ def _revoke_u_if_rt_winner(
     rt_mat = np.vstack(rts)
     i = names.index(type_name)
     ranked = np.sort(rt_mat, axis=0)[::-1]
-    exclusive = ranked[0] >= float(fold) * np.maximum(ranked[1], 1e-9)
+    exclusive = ranked[0] > np.maximum(ranked[1], 1e-9)
     winner = rt_mat.argmax(axis=0)
     return np.asarray(is_u, dtype=bool) & ~((winner == i) & exclusive)
 
@@ -288,18 +292,9 @@ def _confident_owner_mask(
     max_type_mean: float,
     gap: float = CROSS_TYPE_ANCHOR_GAP,
 ) -> dict[str, np.ndarray]:
-    """Per type, True for genes where that type is the top expresser by at
-    least a ``gap``-fold multiplicative margin over the runner-up.
+    """Genes where this type leads the runner-up by at least ``gap``.
 
-    Deliberately stricter than ``_dominant_owner_masks``'s plain argmax test
-    (which allows near-ties): this pool anchors ``_cross_type_anchor_mask``'s
-    independent ``rho_t`` estimate below, so a housekeeping-shaped gene
-    sneaking in via a noise-driven near-tie would bias that anchor upward
-    toward the gene's own (non-ambient) level, defeating the mechanism.
-    Confirmed via toy simulation before this gap requirement was added:
-    without it, rho_t_anchor came out ~0.65 regardless of the true
-    simulated rho, because housekeeping genes (uniformly ~equal across
-    types) leaked into the "confirmed owner elsewhere" pool via ties.
+    Used as the cross-type ρ anchor pool; ties would bias that anchor.
     """
     if len(type_means) < 2:
         return {t: np.zeros(n_genes, dtype=bool) for t in type_means}
@@ -319,58 +314,11 @@ def _ceiling_cross_type_gate(
     type_means: dict[str, np.ndarray],
     type_indices: dict[str, np.ndarray],
     *,
-    gap: float = OWNER_MIN_FOLD,
     r_t_floor: float = 0.5,
 ) -> dict[str, np.ndarray]:
-    """Per-type gate for ``_type_masks``'s ``ceiling_gate`` (research
-    candidate, off by default -- see ``ambidose.pp.CEILING_CROSS_TYPE_GATE``
-    and ``_type_masks``'s ``ceiling_gate`` docstring for the mechanism).
+    """True where this type's r_t exceeds the median r_t of other types.
 
-    Third design, after two rejected shapes (see DEVLOG.md 2026-09-09 for
-    the full history). The first (``_confident_owner_mask`` reused as-is,
-    single global-argmax winner against the best *other* type) passed a
-    pancreas spot-check but was evaluated on the full manuscript suite and
-    rejected: real, first-order regressions on GSE218853 (5/5 libraries,
-    ARS macro +2.6pp/ERS -2.1pp) and fetal erythroid Hb retention (-5.3pp
-    for a -1.0pp wrong-cell-Hb gain, a >5:1 unfavorable trade), plus a
-    root-caused failure on the realistic_gt PBMC benchmark: when two
-    genuinely related types both carry real signal for the same gene
-    (e.g. a Leiden pass splits T cells into a near-pure T-cell type and a
-    second type where NK and T cells share one coarse label), CD3D/CD3E/
-    CD8A/TRAC-class core identity genes are 6-7x above the true background
-    in *both* types but within ~1.2x of each other -- a single-winner test
-    can award the exception to at most one of them, so a real marker in
-    two legitimately related types loses protection in one or both purely
-    because they are close competitors, not because either is spurious.
-
-    This version instead compares each type's r_t against the *median*
-    r_t of the other usable types (a robust background estimate), not the
-    single best competitor: ``r_t[t] >= gap * median(r_t[other types])
-    and r_t[t] > r_t_floor``. Two related types that both sit far above
-    the true background (the common case above) can both clear this test
-    simultaneously, since neither has to out-compete the other directly --
-    the median of the *other* five-plus types stays low even when one of
-    them is itself elevated. Verified directly before promoting this
-    version to the only implementation: on the realistic_gt PBMC case,
-    every core T-cell marker (CD3D/E/G, CD2, CD8A/B, IL7R, TRAC) and every
-    NK marker (NKG7, GNLY, KLRD1, KLRB1) now keeps protection in both the
-    T-cell-dominant and the NK+T-cell-merged coarse type; on the pancreas
-    case, the true acinar type's 14 core markers and a small real myeloid
-    type's 6 markers (S100a8/a9, Mrc1, Mpeg1, Clec4e, C5ar1) all still
-    keep protection, same as the rejected version. Structurally more
-    permissive than the single-winner version (keeps roughly 2x as many
-    (type,gene) pairs on both spot-check datasets) -- not yet evaluated on
-    the full manuscript suite; that is the next step before any promotion
-    decision, not a substitute for it.
-
-    ``gap`` defaults to the general-purpose ownership fold
-    ``OWNER_MIN_FOLD`` (1.2), not the stricter ``CROSS_TYPE_ANCHOR_GAP``
-    (3.0) calibrated for a different, deliberately conservative anchor-pool
-    purpose elsewhere in this module.
-
-    Fewer than two usable types means there is nothing to compare
-    against -- returns all-True (pass-through, preserving the pre-gate
-    unconditional exception).
+    Related types can both pass. Fewer than two usable types: all True.
     """
     usable = {t: m for t, m in type_means.items() if type_indices[t].size >= MIN_TYPE_CELLS}
     pass_through = {t: np.ones(chi.size, dtype=bool) for t in type_means}
@@ -386,7 +334,7 @@ def _ceiling_cross_type_gate(
     result = dict(pass_through)
     for i, t in enumerate(names):
         background = np.median(np.delete(stacked, i, axis=0), axis=0)
-        result[t] = (r_t[t] >= gap * np.maximum(background, 1e-9)) & (r_t[t] > r_t_floor)
+        result[t] = (r_t[t] > np.maximum(background, 1e-9)) & (r_t[t] > r_t_floor)
     return result
 
 
@@ -405,32 +353,12 @@ def _cross_type_anchor_mask(
     min_rho_t_anchor: float = CROSS_TYPE_ANCHOR_MIN_RHO,
     n_jobs: int | None = None,
 ) -> dict[str, np.ndarray]:
-    """Extra native-gene protection per type, via an independently-anchored
-    cross-type ``rho_t`` estimate (sixth #77 candidate, CHANGELOG).
+    """Protect genes whose r_t exceeds ``k`` times a ρ estimated from
+    genes confidently owned in other types.
 
-    ``_dominant_owner_masks`` protects a gene in the empirically calibrated owner groups where it is
-    the global argmax; a gene that is ambiguously mid-level in several types
-    at once (the actual housekeeping-gene bias mechanism, #77) is not the
-    argmax anywhere and gets no protection at all. This mechanism adds a
-    second, independent test per type: build an "anchor pool" of genes with
-    a *confident* owner in some OTHER type (``_confident_owner_mask``, so the
-    anchor itself cannot be contaminated by the ambiguous genes this is
-    trying to protect), estimate that type's own ambient dose ``rho_t``
-    purely from those anchor genes, and flag any of this type's own
-    unexpressed-by-the-ambient-ceiling-test candidate genes as native
-    (protected) if its apparent per-gene ratio exceeds ``k`` times that
-    independent anchor -- evidence the gene carries real signal beyond what
-    this type's own ambient dose would explain.
-
-    ``min_rho_t_anchor`` prevents unstable ratio tests when the independently
-    estimated ambient fraction is near zero. The 0.1 default separates the
-    low-signal barnyard cases from the cell-type structure seen in PBMC data.
-
-    ``types_s``: the full-length per-cell type label array, pre-masked to
-    the current sample group (non-members set to a value not equal to any
-    real type name) -- so ``np.flatnonzero(types_s == t)`` yields indices
-    directly into the full ``x``/``n``/``chi`` arrays, matching every other
-    per-sample-group loop in this module.
+    ``types_s`` is the full-length type array for this sample (non-members
+    are not a real type name). Skip the test when that ρ is below
+    ``min_rho_t_anchor``.
     """
     n_genes = chi.size
 
@@ -439,11 +367,7 @@ def _cross_type_anchor_mask(
             return type_indices[t]
         return np.flatnonzero(types_s == t)
 
-    # Ownership and extra-clear already ignore groups smaller than
-    # MIN_TYPE_CELLS. The anchor pool must use the same catalog: a 2–9
-    # cell Leiden fragment can spike one gene by Poisson noise and pass
-    # the 3-fold confident-owner gap, which then pollutes every other
-    # type's rho_t_anchor.
+    # Same size floor as extra-clear: tiny groups can spike a gene by chance.
     usable_means = {
         t: mean_t for t, mean_t in type_means_s.items() if _idx(t).size >= MIN_TYPE_CELLS
     }
@@ -521,62 +445,12 @@ def _exclusive_owner_masks(
     group_se: np.ndarray | None = None,
     se_z: float = OWNER_GAP_SE_Z,
 ) -> dict[str, np.ndarray]:
-    """Owner group(s) per gene: a bottom-up gap cascade, not just the
-    single global argmax.
+    """Owner groups per gene from a bottom-up gap in sorted means.
 
-    The same broad cell type can land in several meta-groups at very
-    different expression magnitudes for the same gene (e.g. erythroid
-    maturation stages differ an order of magnitude in hemoglobin) --
-    requiring a single global winner left every meta-group but the largest
-    fully unprotected, even when each one is, on its own, far above any
-    genuinely different, non-owning type's level.
-
-    Comparing every candidate against the single lowest group's mean was
-    tried first and rejected: on real data it also let genuinely
-    off-target, contamination-level groups qualify whenever the true
-    minimum happened to sit near zero, which is common -- that widened
-    the FOLD bar into triviality and measurably *worsened* kidney marker
-    leak_ratio (0.0064 -> 0.0082, see CHANGELOG). Instead, sort each
-    gene's group means descending and scan gaps from the bottom up: the
-    owner/background boundary is the lowest-ranked adjacent pair whose
-    ratio already clears ``OWNER_MIN_FOLD``; every group at or above that
-    rank shares ownership, everything below it does not. This reduces to
-    the original single-winner rule when there is one clear leader over a
-    tight background cluster, and extends it correctly when several
-    groups (fragmented same-identity clusters) all sit well above the
-    lowest, undifferentiated tier.
-
-    A winning meta-group's eligibility is shared by every fragment merged
-    into it, but a fragment only *inherits* that share if its own raw mean
-    is within ``OWNER_FRAGMENT_MIN_SHARE_FOLD`` of the meta-group's
-    strongest individual fragment (see that constant's docstring). Without
-    this, a biologically distinct, low-expressing fragment that
-    complete-linkage merged in only because its own profile was too noisy
-    to separate (small n -> large split-half noise -> a wide compatibility
-    window) rides along on a real marker-expressing fragment's grant and
-    gets unconditional protection (``native_confidence=1.0``) for a gene it
-    doesn't actually express -- directly protecting ambient contamination
-    of an off-target gene from subtraction.
-
-    ``group_se`` (optional, one row per meta-group, same shape as
-    ``group_means``) widens the gap test by ``se_z`` standard errors on
-    each side before comparing to ``OWNER_MIN_FOLD``: a candidate gap only
-    counts if it survives under the *most conservative* reading of both
-    group means, not just their point estimates. Two groups whose raw
-    means happen to sit on either side of the 1.2-fold line by an amount
-    within their own sampling noise are otherwise a coin flip -- verified
-    directly on GSE218853 (Itm2b): Proximal_tubule's mean sits at 7.48
-    against neighbouring Stromal's 6.87 in one replicate (owned, ratio
-    1.09, decided by a *different*, well-separated gap further down) and
-    at 13.30 against Stromal's 15.98 in another replicate of the same
-    tissue (ratio 1.201, barely over ``OWNER_MIN_FOLD``, unowned) -- a
-    rank swap between two means whose per-cell standard errors (0.06-1.25)
-    show they are not distinguishable, not a real biological difference
-    between replicates. Without ``group_se`` the cascade treats both as
-    equally confident decisions; with it, a gap that cannot clear the fold
-    test even under conservative bounds is skipped and the scan continues
-    for one that can, rather than resolving a statistical tie by which way
-    the point estimate happened to fall.
+    Scan adjacent ranks from the bottom. The first strict gap (leader
+    lower bound above runner-up upper bound, using ``group_se`` when
+    given) is the owner/background cut. Fragments inherit a winning
+    meta only if they are its sole member or still beat every other meta.
     """
     names = list(type_means)
     stacked = np.asarray(group_means)
@@ -595,7 +469,7 @@ def _exclusive_owner_masks(
             lower_vals = upper_vals = sorted_vals
         cutoff_rank = np.full(n_genes, -1, dtype=np.int64)
         for r in range(n_meta - 1, 0, -1):
-            ratio_ok = lower_vals[r - 1] >= OWNER_MIN_FOLD * np.maximum(upper_vals[r], 1e-9)
+            ratio_ok = lower_vals[r - 1] > np.maximum(upper_vals[r], 1e-9)
             newly_set = ratio_ok & (cutoff_rank == -1)
             cutoff_rank[newly_set] = r - 1
         top_val = sorted_vals[np.clip(cutoff_rank, 0, n_meta - 1), np.arange(n_genes)]
@@ -605,14 +479,16 @@ def _exclusive_owner_masks(
         eligible = np.zeros((n_meta, n_genes), dtype=bool)
         np.put_along_axis(eligible, order, eligible_sorted, axis=0)
     n_meta_actual = stacked.shape[0] if stacked.ndim == 2 else 1
-    group_max = np.zeros((n_meta_actual, n_genes), dtype=np.float64)
-    for i, name in enumerate(names):
-        m = int(member_of[i])
-        group_max[m] = np.maximum(group_max[m], type_means[name])
+    other_max = np.zeros((n_meta_actual, n_genes), dtype=np.float64)
+    if stacked.ndim == 2 and stacked.shape[0] >= 2:
+        for m in range(n_meta_actual):
+            other_max[m] = np.max(np.delete(stacked, m, axis=0), axis=0)
+    member_of = np.asarray(member_of, dtype=np.int64)
+    frag_count = np.bincount(member_of, minlength=n_meta_actual)
     return {
         name: eligible[int(member_of[i])]
         & (type_means[name] > max_type_mean)
-        & (type_means[name] * OWNER_FRAGMENT_MIN_SHARE_FOLD >= group_max[int(member_of[i])])
+        & ((frag_count[int(member_of[i])] <= 1) | (type_means[name] > other_max[int(member_of[i])]))
         for i, name in enumerate(names)
     }
 
@@ -624,17 +500,7 @@ def _single_winner_owner_masks(
     *,
     max_type_mean: float,
 ) -> dict[str, np.ndarray]:
-    """Original single global-argmax winner rule (the frozen baseline
-    before the gap cascade). Used alongside it, not instead of it: see
-    ``_dominant_owner_masks(..., also_single_winner=True)`` and
-    ``_realloc_unspent_rank1``'s ``leftover_cap`` -- the gap cascade's
-    wider ownership is computed and used for the actual take, but this
-    narrower rule bounds how much *extra* leftover dose-budget that wider
-    ownership is allowed to create for realloc to redirect elsewhere, so
-    protecting more fragmented markers can't push realloc's total
-    footprint past what the already-validated frozen baseline had (see
-    CHANGELOG).
-    """
+    """Single global-argmax owner. Used only to cap leftover realloc."""
     names = list(type_means)
     stacked = np.asarray(group_means)
     if stacked.ndim != 2 or stacked.shape[0] < 2:
@@ -643,92 +509,9 @@ def _single_winner_owner_masks(
     else:
         winner = stacked.argmax(axis=0)
         ranked = np.sort(stacked, axis=0)[::-1]
-        exclusive = (ranked[0] > max_type_mean) & (
-            ranked[0] >= OWNER_MIN_FOLD * np.maximum(ranked[1], 1e-9)
-        )
+        exclusive = (ranked[0] > max_type_mean) & (ranked[0] > np.maximum(ranked[1], 1e-9))
     return {
         name: (winner == int(member_of[i])) & exclusive & (type_means[name] > max_type_mean)
-        for i, name in enumerate(names)
-    }
-
-
-def _topk_owner_masks(
-    group_means: np.ndarray,
-    type_means: dict[str, np.ndarray],
-    member_of: np.ndarray,
-    *,
-    max_type_mean: float,
-    top_k: int = OWNER_TOP_K,
-) -> dict[str, np.ndarray]:
-    """NOT called from ``_dominant_owner_masks`` -- kept as a documented,
-    fully-tried negative result, not live code. See CHANGELOG for the full
-    writeup; summary below.
-
-    Owner group(s) per gene: gap-cascade eligible (genuine cross-group
-    specificity), capped to that group's own top ``top_k`` among those.
-
-    A pure self-referential magnitude floor (a multiple of the group's own
-    median candidate mean) was tried and rejected: a real, specific marker
-    isn't necessarily the group's own highest-expressed gene -- coexisting
-    non-specific, uniformly high genes (housekeeping-like) can sit above it
-    within the same group, so comparing a candidate against its own
-    group's median wrongly disqualifies genes that are clearly specific
-    when compared against *other* groups. Specificity is inherently a
-    cross-group question, not a within-group one. Rank alone (no floor at
-    all) was tried first and rejected too: with a small candidate pool,
-    "top-K" degenerates to "every candidate."
-
-    This version reuses the already-validated gap-cascade eligibility test
-    (see ``_exclusive_owner_masks``, safe on must-win, multi-owner-capable,
-    the one actually wired in) as the specificity floor, then additionally
-    caps each group to its own top ``top_k`` genes among what it's
-    eligible for. Rejected for a different reason than the first two
-    attempts: any fixed absolute ``top_k`` is the wrong scale whenever
-    ownership breadth varies by orders of magnitude across contexts.
-    Verified directly on Mixture (barnyard): unrestricted gap-cascade
-    correctly gives hg19 10,551 owned genes and mm10 9,438 (real
-    species-exclusive gene counts, not noise), so any small top_k (30, 50)
-    truncates ~99.5% of genuinely-owned genes and collapsed Mixture's
-    barnyard precision 0.90 -> 0.55 -- not a small-candidate-pool
-    degenerate case (that was ruled out by direct inspection: both
-    hg19/mm10 hit exactly top_k=50, i.e. the cap bound, not the candidate
-    count). A real cell-type marker panel (kidney/fetal liver COARSE_MARKERS
-    scale) and two whole non-overlapping species transcriptomes are
-    ownership problems that differ by orders of magnitude in scale; no
-    single fixed K serves both.
-    """
-    names = list(type_means)
-    stacked = np.asarray(group_means)
-    n_genes = next(iter(type_means.values())).size
-    if stacked.ndim != 2 or stacked.shape[0] < 2:
-        eligible = np.zeros((1, n_genes), dtype=bool)
-    else:
-        n_meta = stacked.shape[0]
-        order = np.argsort(-stacked, axis=0)
-        sorted_vals = np.take_along_axis(stacked, order, axis=0)
-        cutoff_rank = np.full(n_genes, -1, dtype=np.int64)
-        for r in range(n_meta - 1, 0, -1):
-            ratio_ok = sorted_vals[r - 1] >= OWNER_MIN_FOLD * np.maximum(sorted_vals[r], 1e-9)
-            newly_set = ratio_ok & (cutoff_rank == -1)
-            cutoff_rank[newly_set] = r - 1
-        top_val = sorted_vals[np.clip(cutoff_rank, 0, n_meta - 1), np.arange(n_genes)]
-        valid = (cutoff_rank >= 0) & (top_val > max_type_mean)
-        ranks = np.arange(n_meta)[:, None]
-        gap_eligible_sorted = (ranks <= cutoff_rank[None, :]) & valid[None, :]
-        gap_eligible = np.zeros((n_meta, n_genes), dtype=bool)
-        np.put_along_axis(gap_eligible, order, gap_eligible_sorted, axis=0)
-
-        eligible = np.zeros((n_meta, n_genes), dtype=bool)
-        for m in range(n_meta):
-            candidates = np.flatnonzero(gap_eligible[m])
-            if candidates.size == 0:
-                continue
-            row = stacked[m]
-            k = min(top_k, candidates.size)
-            top_idx = candidates[np.argpartition(-row[candidates], k - 1)[:k]]
-            eligible[m, top_idx] = True
-    return {
-        name: eligible[int(member_of[i])] & (type_means[name] > max_type_mean)
         for i, name in enumerate(names)
     }
 
@@ -843,25 +626,10 @@ def _dominant_owner_masks(
 ) -> tuple[dict[str, np.ndarray], int] | tuple[dict[str, np.ndarray], dict[str, np.ndarray], int]:
     """Owners after complete-linkage merge of groups inside split noise.
 
-    Half-splits estimate each group's whole-profile sampling variation.
-    Two groups merge only if *every* pair in the resulting cluster is
-    within ``min`` of their split noises (complete linkage, not a
-    max-noise single-linkage chain). Ownership is exclusive between the
-    resulting meta-groups and shared by fragments inside a winner.
-    A gene with no unique owner (near-tie across metas, including unowned
-    injection genes) is not protected. If merge collapses to one
-    meta-group, fall back to per-fragment argmax with the same uniqueness
-    fold so identity genes still have an owner. A sample with only one
-    group of at least ``MIN_TYPE_CELLS`` cells owns every gene above
-    ``max_type_mean`` in that group.
-
-    ``also_single_winner=True`` additionally computes ``_single_winner_owner_masks``
-    on the same (expensive to compute) meta-groups and returns it as a
-    second dict -- ``(masks, masks_single_winner, n_meta)`` instead of
-    ``(masks, n_meta)`` -- so a caller can bound how much *extra* leftover
-    the wider gap-cascade ownership creates for ``_realloc_unspent_rank1``
-    relative to the frozen single-winner baseline, without paying for
-    ``_split_noise_meta_ids`` twice.
+    Merge only if every pair in the cluster is within split-half noise.
+    One remaining meta falls back to per-fragment argmax. With
+    ``also_single_winner=True``, also return unique-argmax masks for the
+    leftover realloc cap.
     """
     type_means = {name: type_means[name] for name in sorted(type_means)}
     names = list(type_means)
@@ -887,12 +655,7 @@ def _dominant_owner_masks(
     labels = _split_noise_meta_ids(x, n, names, idx_map, cell_keys=cell_keys, n_splits=n_splits)
     n_meta = int(np.unique(labels).size)
 
-    # Per-fragment sampling variance of the mean (Bessel-corrected SD /
-    # sqrt(n)), pooled up to whichever meta-group each fragment lands in.
-    # Feeds _exclusive_owner_masks's gap test so a fold that only clears
-    # 1.2x by an amount smaller than the groups' own noise doesn't get
-    # treated as a resolved ownership decision (see that function's
-    # docstring for the GSE218853 case this fixes).
+    # Per-fragment SE of the mean, pooled to the fragment's meta-group.
     sizes_arr = np.asarray(sizes, dtype=np.float64)
     frag_var = np.vstack(
         [
@@ -935,11 +698,11 @@ def _p_set_is_soup_like(
     if p.size == 0 or idx.size == 0:
         return False
     chi_p = float(chi[p].sum())
-    if chi_p < MIN_PROTECTED_CHI:
-        return False
     remain = float(np.asarray(x[idx][:, p].sum()))
     soup = float(n[idx].sum()) * chi_p
-    return soup > 0 and remain <= NATIVE_SOUP_RATIO * soup
+    if soup < 1.0:
+        return False
+    return remain <= soup + NOISE_K * np.sqrt(soup)
 
 
 def _type_masks(
@@ -948,80 +711,21 @@ def _type_masks(
     chi: np.ndarray,
     idx: np.ndarray,
     *,
-    max_type_mean: float,
+    max_type_mean: float | None,
     min_chi: float,
-    top_n: int,
+    top_n: int | None,
     exclude: np.ndarray | None = None,
     empirical_margin: bool = False,
     collision_exception: bool = True,
     ceiling_gate: np.ndarray | None = None,
+    rho_t: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Unexpressed genes, diagnostic native mask, native confidence, and r_t.
+    """Unexpressed mask, native mask, native confidence, and r_t = mean/expected.
 
-    ``r_t`` (``mean/expected``) is also returned so callers can down-weight
-    leftover-budget reallocation onto genes that failed the significance
-    test but still sit well above the ambient ceiling (see
-    ``_realloc_unspent_rank1``'s ``r_t`` parameter) -- a low-confidence gene
-    with r_t far above 1 looks more like an under-powered real marker than
-    like ambient, even though it didn't clear ``native_confidence``.
-
-    U is ranked by χ among unexpressed genes (same rule as dose). Genes
-    sitting on the ρ=1 ceiling (``mean/(n̄χ) > 0.85``), or abundant genes
-    closer to that ceiling than to true soup (``mean > U_MAX_LIBRARY_FRAC
-    · n̄`` and ``mean/(n̄χ) > 0.5``), are not U. Extra-clear is further
-    restricted to ``mean/(n̄χ) < SOUP_ONLY_MAX_RT`` so mid-ceiling
-    leftovers are not wiped. True soup has ``mean/(n̄χ) ≈ ρ``. Do not intersect with the global top-χ set: those are
-    the majority type's markers, so the intersection is empty for the type
-    that dominates soup.
-    ``exclude`` (e.g. this type's dominantly-expressed genes) is never
-    eligible for U even if its mean sits at/below the ambient ceiling --
-    also folded into ``is_p`` so it gets the native-gene protection in
-    ``_expand_take_to_cells`` too, not just soupOnly exemption.
-
-    ``empirical_margin`` uses the observed per-gene SD. It requires
-    ``exclude`` so highly variable native genes cannot enter the ambient pool.
-
-    A per-cell-dose-based ambient baseline (``mean(d_c)*chi`` instead of
-    ``n̄*chi``) was tried here and reverted -- see CHANGELOG. It correctly
-    rescued real markers that are also a sample's dominant ambient
-    contaminant (e.g. hemoglobin in blood-rich tissue) in their own true
-    cluster, but had no way to distinguish that case from a gene that is
-    genuinely uniform ambient with a chi-dominant, dose-underestimated
-    profile: both look "significant" under the dose baseline in most or
-    all types simultaneously, not just the true owner, so a cross-type
-    uniformity gate (reject the rescue when 2+ types independently pass)
-    does not separate them either -- verified directly (HBA1/HBA2/ALAS2/
-    GYPA passed the dose-based test in 4-6 of 6 real cell types on a
-    fetal-liver sample, not just Erythroid) and broke a synthetic test's
-    genuinely-uniform ambient gene (`den[:,2]` dropped from an expected 0
-    to 38-39 of 40, essentially unremoved).
-
-    ``ceiling_gate`` (research candidate, off by default -- see
-    ``ambidose.pp.CEILING_CROSS_TYPE_GATE``): the collision/ceiling
-    exception below grants unconditional protection to any gene whose
-    *own* type mean approaches the ρ=1 ambient ceiling, without checking
-    whether any other type shows the same pattern -- a type whose cells
-    genuinely have unusually high per-cell ρ can trip this on pure soup,
-    no real expression required (over-protection, the mirror image of the
-    under-protection ``_revoke_u_with_expressing_subset`` fixes in
-    0.3.12). ``ceiling_gate``, when given, ANDs an extra per-gene
-    boolean requiring this type's r_t to beat every other usable type's
-    r_t by ``OWNER_MIN_FOLD`` (built by the caller via
-    ``_confident_owner_mask`` on r_t instead of raw means -- reused as-is,
-    not reimplemented). This is a different mechanism from the dose-
-    baseline swap two paragraphs up: that one replaced ``expected`` itself
-    and failed because a genuinely uniform ambient gene passed a raw
-    "significant in >=2 types" count test as easily as a real marker did.
-    This one leaves ``expected`` untouched and instead gates the existing
-    exception with a magnitude *gap* test (top r_t vs runner-up r_t),
-    which correctly keeps protection for a real marker that also has some
-    signal in one small related type (gap-cascade's ``OWNER_MIN_FOLD``,
-    not the stricter ``CROSS_TYPE_ANCHOR_GAP=3`` calibrated for a
-    different, deliberately conservative purpose elsewhere in this
-    module -- verified directly on the GSE125588 pancreas case before
-    this was wired in: a flat 3x gate and a naive per-type gap-cascade
-    both wrongly stripped real acinar/myeloid markers; top1-vs-top2 on
-    r_t at ``OWNER_MIN_FOLD=1.2`` did not).
+    U is unexpressed genes ranked by χ. ``exclude`` is never U and is
+    treated as native. ``empirical_margin`` uses per-gene SD and requires
+    ``exclude``. ``ceiling_gate``, when set, further restricts the
+    ceiling/collision exception.
     """
     mean = np.asarray(x[idx].mean(axis=0)).ravel()
     expected = float(n[idx].mean()) * chi
@@ -1051,10 +755,9 @@ def _type_masks(
         se = np.sqrt(np.maximum(expected, 0.0) / idx.size)
     z = np.divide(mean - expected, se, out=np.zeros_like(mean), where=se > 0)
     z[(se == 0) & (mean > expected)] = np.inf
-    # One-sided evidence that expression exceeds ambient. Equality (z=0)
-    # is ambient-consistent, so confidence is 0, not 0.5.
+    # One-sided: z=0 is ambient-consistent, so confidence is 0.
     native_confidence = np.clip(2.0 * ndtr(z) - 1.0, 0.0, 1.0)
-    native_confidence[mean <= max_type_mean] = 0.0
+    native_confidence[mean <= _expression_floor(idx.size, max_type_mean)] = 0.0
 
     n_bar = float(n[idx].mean()) if idx.size else 0.0
     r_t = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
@@ -1069,8 +772,8 @@ def _type_masks(
         native_confidence[abundant_collision] = 1.0
     is_p = ~unexp
     cand_mask = unexp & (chi >= min_chi)
-    if n_bar > 0:
-        cand_mask = cand_mask & (r_t < SOUP_ONLY_MAX_RT)
+    if n_bar > 0 and rho_t is not None:
+        cand_mask = cand_mask & _mean_compatible_with_type_rho(mean, expected, idx.size, rho_t)
     if exclude is not None:
         cand_mask = cand_mask & ~exclude
         is_p = is_p | exclude
