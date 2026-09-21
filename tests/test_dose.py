@@ -910,19 +910,12 @@ def test_diagnose_rejects_mismatched_estimator_provenance():
 
 
 def test_native_profile_orthogonal_to_chi_removes_chi_direction():
-    import importlib.util
-    from pathlib import Path
+    from ambidose._dose import _native_profile_orthogonal_to_chi
 
-    spec = importlib.util.spec_from_file_location(
-        "za",
-        Path(__file__).resolve().parents[1] / "scripts" / "run_zero_ambient_control_pbmc.py",
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
     chi = np.array([0.5, 0.3, 0.2])
     mixed = 0.4 * chi + 0.6 * np.array([0.1, 0.1, 0.8])
     mixed = mixed / mixed.sum()
-    native, alpha = mod._native_profile_orthogonal_to_chi(mixed, chi)
+    native, alpha = _native_profile_orthogonal_to_chi(mixed, chi)
     assert alpha > 0
     assert native.sum() == pytest.approx(1.0)
     assert np.dot(native, chi) < np.dot(mixed, chi)

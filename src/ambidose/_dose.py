@@ -1085,3 +1085,33 @@ def estimate_dose_mixture(*args, **kwargs):
     from ._mixture import estimate_dose_mixture as _impl
 
     return _impl(*args, **kwargs)
+
+
+def _native_profile_orthogonal_to_chi(
+    type_mean: np.ndarray, chi: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """Nonnegative native profile after removing the χ direction.
+
+    ``type_mean ≈ α χ + native``, ``α = clip(⟨type_mean, χ⟩ / ⟨χ, χ⟩, 0, 1)``,
+    ``native = clip(type_mean - α χ, 0)`` then L1-normalized. Simulation
+    support for constructing a ground-truth native profile orthogonal to a
+    known ambient composition (e.g. a zero-ambient negative control); not
+    part of the `denoise()`/`subtract()` estimation path itself.
+    """
+    type_mean = np.asarray(type_mean, dtype=np.float64)
+    chi = np.asarray(chi, dtype=np.float64)
+    denom = float(np.dot(chi, chi))
+    if denom <= 0 or type_mean.sum() <= 0:
+        p = (
+            type_mean / type_mean.sum()
+            if type_mean.sum() > 0
+            else np.full(type_mean.size, 1.0 / type_mean.size)
+        )
+        return p, 0.0
+    alpha = float(np.clip(np.dot(type_mean, chi) / denom, 0.0, 1.0))
+    native = np.clip(type_mean - alpha * chi, 0.0, None)
+    s = float(native.sum())
+    if s <= 0:
+        p = type_mean / type_mean.sum()
+        return p, alpha
+    return native / s, alpha
