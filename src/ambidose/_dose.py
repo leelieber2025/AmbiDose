@@ -695,8 +695,14 @@ def estimate_dose(
         # ceiling in every type and stays in the pool. See
         # _native_everywhere_mask.
         native_everywhere = _native_everywhere_mask(
-            x, n, chi, types, in_s, max_type_mean=max_type_mean,
-            doublet_scores=doublet_scores, doublet_exclude_q=doublet_exclude_q,
+            x,
+            n,
+            chi,
+            types,
+            in_s,
+            max_type_mean=max_type_mean,
+            doublet_scores=doublet_scores,
+            doublet_exclude_q=doublet_exclude_q,
         )
         for t in sample_types:
             idx = np.flatnonzero(in_s & (types == t))

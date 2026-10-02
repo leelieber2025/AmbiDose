@@ -53,6 +53,8 @@ def indices_excluding_high_doublet(idx, scores, q):
     if keep.size < MIN_TYPE_CELLS:
         return idx
     return keep
+
+
 OWNER_GAP_SE_Z = 1.0
 # Use first-inflection only if the 3-component mixture is this inflated
 # relative to the barcode-rank cliff.
