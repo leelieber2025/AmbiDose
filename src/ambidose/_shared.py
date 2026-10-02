@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import sys
 import threading
@@ -37,6 +38,21 @@ SHRINK_K = 8.0
 MIN_GENES = 8
 MIN_VALID = 5
 MIN_TYPE_CELLS = 10
+
+
+def indices_excluding_high_doublet(idx, scores, q):
+    """Drop the highest doublet scores from a type mean. Too few cells: keep all."""
+    if q is None or scores is None or len(idx) == 0:
+        return idx
+    sc = np.asarray(scores, dtype=np.float64)[np.asarray(idx)]
+    ok = np.isfinite(sc)
+    if int(ok.sum()) < 20:
+        return idx
+    thr = float(np.quantile(sc[ok], q))
+    keep = np.asarray(idx)[~(ok & (sc >= thr))]
+    if keep.size < MIN_TYPE_CELLS:
+        return idx
+    return keep
 OWNER_GAP_SE_Z = 1.0
 # Use first-inflection only if the 3-component mixture is this inflated
 # relative to the barcode-rank cliff.
@@ -52,6 +68,42 @@ EMPTY_TYPE = object()
 EMPTY_TYPES = frozenset({EMPTY_TYPE})
 
 
+class _LiveStderrHandler(logging.StreamHandler):
+    """A StreamHandler that always writes to the *current* ``sys.stderr``.
+
+    Plain ``logging.StreamHandler(sys.stderr)`` binds to whichever object
+    ``sys.stderr`` is at construction time. Since this handler is created
+    once and cached on the ``ambidose`` logger (below), that first binding
+    can outlive it -- e.g. under pytest, where ``capsys`` replaces
+    ``sys.stderr`` per test, an earlier test's handler creation would
+    otherwise leave later tests writing to a stream capsys is no longer
+    reading from.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(sys.stderr)
+
+    @property
+    def stream(self):
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value):
+        pass
+
+
+def get_logger() -> logging.Logger:
+    """Package logger. Messages go to stderr so CLI stdout stays machine-readable."""
+    log = logging.getLogger("ambidose")
+    if not log.handlers:
+        handler = _LiveStderrHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+        log.propagate = False
+    return log
+
+
 class _StageProgress:
     """Elapsed-time reporting and a quiet heartbeat for long product stages."""
 
@@ -64,7 +116,7 @@ class _StageProgress:
 
     def __enter__(self):
         self.started = time.monotonic()
-        print(f"ambidose: {self.label}...", file=sys.stderr, flush=True)
+        get_logger().info("ambidose: %s...", self.label)
         self._thread = threading.Thread(target=self._heartbeat, daemon=True)
         self._thread.start()
         return self
@@ -72,11 +124,7 @@ class _StageProgress:
     def _heartbeat(self) -> None:
         while not self._stop.wait(self.heartbeat_seconds):
             elapsed = time.monotonic() - self.started
-            print(
-                f"ambidose: still {self.label} (elapsed {elapsed:.0f}s)...",
-                file=sys.stderr,
-                flush=True,
-            )
+            get_logger().info("ambidose: still %s (elapsed %.0fs)...", self.label, elapsed)
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self._stop.set()
@@ -84,11 +132,7 @@ class _StageProgress:
             self._thread.join()
         elapsed = time.monotonic() - self.started
         status = "completed" if exc_type is None else "failed"
-        print(
-            f"ambidose: {self.label} {status} in {elapsed:.1f}s",
-            file=sys.stderr,
-            flush=True,
-        )
+        get_logger().info("ambidose: %s %s in %.1fs", self.label, status, elapsed)
 
 
 def _reject_view(adata: AnnData, fname: str) -> None:

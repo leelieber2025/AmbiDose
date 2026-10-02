@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: ambidose
-Version: 0.5.9
+Version: 0.5.12
 Summary: Per-cell ambient dose removal for droplet scRNA-seq, using empty droplets to pin soup composition
 Author-email: "Zhao Li (李钊)" <leelieber@gmail.com>
 License-Expression: Apache-2.0
@@ -56,6 +56,7 @@ Dynamic: license-file
 [![Documentation](https://readthedocs.org/projects/ambidose/badge/?version=latest)](https://ambidose.readthedocs.io/en/latest/)
 [![CI](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml/badge.svg)](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![bioRxiv](https://img.shields.io/badge/bioRxiv-preprint-b31b1b)](https://www.biorxiv.org/content/10.64898/2026.09.27.754849v1)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22278199.svg)](https://doi.org/10.5281/zenodo.22278199)
 
 **AmbiDose** removes ambient RNA from droplet scRNA-seq. Empty droplets
@@ -95,7 +96,7 @@ the QC report before using it as a contamination rate.
 
 ## Status
 
-**0.5.9 (Alpha).** Import as `import ambidose as amdose`. The entry point is
+**0.5.12 (Alpha).** Import as `import ambidose as amdose`. The entry point is
 `denoise()`. See the
 [API reference](https://ambidose.readthedocs.io/en/latest/api/index.html).
 
@@ -109,20 +110,26 @@ the QC report before using it as a contamination rate.
 
 ## Citation
 
-Pin the package version used in the analysis, for example `ambidose==0.5.9`.
-Software record: [10.5281/zenodo.22278199](https://doi.org/10.5281/zenodo.22278199).
-See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/latest/citation.html).
+If you use AmbiDose in published work, please cite the preprint:
+
+> Zhao Li, Aaron W. James, Shengxuan Li.  
+> AmbiDose: per-cell removal budgets for ambient RNA contamination.  
+> *bioRxiv* (2026). https://doi.org/10.64898/2026.09.27.754849
 
 ```bibtex
-@software{li2026ambidose,
-  title   = {AmbiDose: per-cell ambient dose removal for droplet scRNA-seq},
-  author  = {Li, Zhao},
+@article{li2026ambidose,
+  title   = {AmbiDose: per-cell removal budgets for ambient RNA contamination},
+  author  = {Li, Zhao and James, Aaron W. and Li, Shengxuan},
+  journal = {bioRxiv},
   year    = {2026},
-  version = {0.5.9},
-  doi     = {10.5281/zenodo.22278199},
-  url     = {https://doi.org/10.5281/zenodo.22278199},
+  doi     = {10.64898/2026.09.27.754849},
+  url     = {https://www.biorxiv.org/content/10.64898/2026.09.27.754849v1},
 }
 ```
+
+For the software record, cite the [Zenodo DOI](https://doi.org/10.5281/zenodo.22278199).
+Pin the package version used in the analysis, for example `ambidose==0.5.12`.
+See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/latest/citation.html).
 
 ## License
 

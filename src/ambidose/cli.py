@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from ._shared import get_logger
 from ._version import __version__
 
 
@@ -582,7 +583,7 @@ def _denoise(args: argparse.Namespace) -> int:
         )
     if str(report_path).strip().lower() != "off":
         write_report(adata, report_path)
-        print(f"QC report: {report_path}", file=sys.stderr)
+        get_logger().info("QC report: %s", report_path)
         print(report_path)
     _print_run_summary(summarize(adata))
     if args.summary_json:

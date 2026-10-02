@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
+from ._dose import _empty_cloud_knee_umi
 from ._shared import (
     CHI_KEY,
     DROPLET_KEY,
@@ -74,10 +75,12 @@ def estimate_chi(
             "droplet_key": droplet_key,
             "empty_label": empty_label,
         }
+        empty_idx = np.flatnonzero(empty)
         run["empty_umi"] = {
             _sample_storage_id(None): {
                 "sample": "",
                 "lam_e": float(n[empty].mean()),
+                "knee_umi": float(_empty_cloud_knee_umi(n, empty_idx)),
                 "n_empty": int(empty.sum()),
                 "phi": _nb2_phi_from_empty(x_empty),
             }
@@ -106,9 +109,11 @@ def estimate_chi(
         names.append(str(name))
         x_empty = x[mask]
         rows.append(_profile(x_empty, sample=str(name)))
+        empty_idx = np.flatnonzero(mask)
         empty_umi[_sample_storage_id(str(name))] = {
             "sample": str(name),
             "lam_e": float(n[mask].mean()),
+            "knee_umi": float(_empty_cloud_knee_umi(n, empty_idx)),
             "n_empty": int(mask.sum()),
             "phi": _nb2_phi_from_empty(x_empty),
         }

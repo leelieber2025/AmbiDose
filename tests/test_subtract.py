@@ -122,12 +122,26 @@ def test_expand_take_sparse_cells_matches_full_length_formula():
     np.testing.assert_allclose(x_new.toarray(), x_old.toarray(), rtol=0, atol=1e-10)
 
 
+def test_soup_first_chi_moves_mass_off_confident_genes():
+    from ambidose._budget import _soup_first_chi
+
+    chi = np.array([0.7, 0.2, 0.1])
+    conf = np.array([1.0, 0.0, 0.5])
+    is_u = np.array([False, True, False])
+    out = _soup_first_chi(chi, conf, is_u)
+    assert out.sum() == pytest.approx(1.0)
+    assert out[0] == 0.0
+    assert out[1] > chi[1]
+
+
 def test_native_confidence_continuously_interpolates_removal():
     observed = np.full(3, 100.0)
     chi = np.full(3, 1.0 / 3.0)
     confidence = np.array([0.0, 0.5, 1.0])
     take = _confidence_weighted_take(observed, chi, 6.0, confidence)
     np.testing.assert_allclose(take, [2.0, 1.1, 0.2])
+    take0 = _confidence_weighted_take(observed, chi, 6.0, confidence, protect_scale=0.0)
+    np.testing.assert_allclose(take0, [2.0, 2.0, 2.0])
 
 
 def test_p_set_is_soup_like_uses_poisson_ceiling():
@@ -1504,6 +1518,40 @@ def test_integer_type_allocation_preserves_group_budget():
     )
     assert int(100 - x.sum()) == 10
     assert set(np.unique(x.data)).issubset({0.0, 1.0})
+
+
+def test_integerize_caps_each_cell_at_its_dose():
+    from ambidose._budget import _integerize_corrected
+
+    raw = sparse.csr_matrix(np.array([[5.0, 5.0, 5.0], [2.0, 2.0, 0.0]]))
+    corrected = raw.copy()
+    corrected.data = np.array([1.6, 1.6, 1.6, 0.2, 0.2])
+    out = _integerize_corrected(
+        raw,
+        corrected,
+        gene_keys=np.array(["a", "b", "c"]),
+        dose=np.array([4.2, 3.0]),
+    )
+    removed = np.asarray(raw.sum(axis=1) - out.sum(axis=1)).ravel()
+    assert removed[0] == 4
+    assert removed[1] <= 3
+    assert np.all(out.toarray() <= raw.toarray())
+
+
+def test_type_means_stay_inside_one_sample():
+    from ambidose._shared import EMPTY_TYPE
+    from ambidose.pp import _type_means
+
+    a = np.tile([100.0, 0.0], (12, 1))
+    b = np.tile([0.0, 100.0], (12, 1))
+    x = sparse.csr_matrix(np.vstack([a, b]))
+    types = np.array(["T"] * 24, dtype=object)
+    pooled = _type_means(x, types)
+    np.testing.assert_allclose(pooled["T"], [50.0, 50.0])
+    masked = types.copy()
+    masked[12:] = EMPTY_TYPE
+    only_a = _type_means(x, masked)
+    np.testing.assert_allclose(only_a["T"], [100.0, 0.0])
 
 
 def test_integer_budget_uses_half_up_rounding():

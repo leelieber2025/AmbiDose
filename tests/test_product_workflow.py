@@ -445,7 +445,7 @@ def test_denoise_rejects_log_counts():
         amdose.denoise(adata, empty_umi_max=80, sample_key=None)
 
 
-def test_denoise_writes_rho_trust(capsys):
+def test_denoise_writes_rho_trust(capsys, caplog):
     adata = make_toy(n_samples=1, n_empty=50, n_cells=30, seed=17)
     cells = adata.obs_names[adata.obs["droplet"].astype(str) == "cell"].tolist()
     amdose.denoise(adata, cell_barcodes=cells, type_key="cell_type", sample_key=None)
@@ -458,7 +458,7 @@ def test_denoise_writes_rho_trust(capsys):
         "under_execution",
         "over_removal",
     }
-    err = capsys.readouterr().err
+    err = capsys.readouterr().err + caplog.text
     assert "denoise completed" in err
     assert "QC for estimated ambient fractions" in err
     assert "corrected counts" in err

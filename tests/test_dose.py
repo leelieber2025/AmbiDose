@@ -909,6 +909,18 @@ def test_diagnose_rejects_mismatched_estimator_provenance():
         diagnose_dose_disagreement(adata)
 
 
+def test_native_profile_orthogonal_to_chi_removes_chi_direction():
+    from ambidose._dose import _native_profile_orthogonal_to_chi
+
+    chi = np.array([0.5, 0.3, 0.2])
+    mixed = 0.4 * chi + 0.6 * np.array([0.1, 0.1, 0.8])
+    mixed = mixed / mixed.sum()
+    native, alpha = _native_profile_orthogonal_to_chi(mixed, chi)
+    assert alpha > 0
+    assert native.sum() == pytest.approx(1.0)
+    assert np.dot(native, chi) < np.dot(mixed, chi)
+
+
 def test_u_mass_fits_empty_droplets_separates_soup_from_clean():
     from scipy import sparse
 
@@ -927,6 +939,14 @@ def test_u_mass_fits_empty_droplets_separates_soup_from_clean():
 
     assert _soup_per_cell_fits_empty(0.05, 400.0, 50.0)
     assert not _soup_per_cell_fits_empty(0.15, 500.0, 30.0)
+    from ambidose._dose import _empty_soup_ceiling, _soup_just_above_empty
+
+    ceil = _empty_soup_ceiling(50.0)
+    assert _soup_per_cell_fits_empty(ceil / 400.0, 400.0, 50.0)
+    assert not _soup_just_above_empty(ceil / 400.0, 400.0, 50.0)
+    assert _soup_just_above_empty(1.5 * ceil / 400.0, 400.0, 50.0)
+    assert _soup_just_above_empty(2.5 * ceil / 400.0, 400.0, 50.0)
+    assert not _soup_just_above_empty(4.0 * ceil / 400.0, 400.0, 50.0)
     from ambidose._dose import _empty_consistent_rank1_budget
 
     cap = _empty_consistent_rank1_budget(800.0, 10, empty_idx, x, is_u)

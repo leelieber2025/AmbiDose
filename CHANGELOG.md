@@ -2,17 +2,96 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.12] - 2026-10-02
+
+### Fixed
+
+- Integer UMI rounding no longer lets one cell's total removal exceed
+  `floor(d_c)`. Genes in that cell compete for the rounded continuous
+  budget, capped by the dose. Rows are not scaled back onto `d_c`.
+- Type means used for ownership are computed inside the current sample.
+  The same type label in another sample does not enter the mean.
+  `_type_means` documents that contract: other samples must be marked
+  empty before the call.
+
+### Added
+
+- QC report and `summarize()` diagnostics gain a "genes left uncorrected as
+  background-consistent" section: for `(sample, type)` groups where
+  unowned-gene UMI mass matched the empty-droplet background (extra-clear
+  skipped, `n_empty_consistent_skip_cells`), the top unowned genes by mean
+  UMI/cell are listed with per-group detection fraction
+  (`uns['ambidose']['background_matched_genes']` /
+  `background_matched_group_identity`). Diagnostic only; correction
+  behavior is unchanged. Intended for cross-checking against post-clustering
+  marker inspection, not as an automatic trigger to rerun with different
+  settings.
+
+## [0.5.11] - 2026-09-21
+
+### Changed
+
+- Inside the low-soup band (soup per cell within 3× the empty-cloud knee),
+  the rank-1 budget is spent on unexpressed and low-confidence genes
+  instead of in proportion to χ. High-confidence genes no longer take the
+  integer counts first.
+- The empty-cloud knee is now stored on `uns['ambidose']['empty_umi']` as
+  `knee_umi` when χ is estimated, instead of being recomputed on every
+  `subtract()` call. Cells routed through the low-soup band are counted in
+  `uns['ambidose']['n_low_soup_full_chi_cells']`.
+- Progress messages (e.g. the tiny-group extra-clear notice) go through
+  the `ambidose` logger instead of `print(..., file=sys.stderr)`.
+
+### Fixed
+
+- `get_logger()`'s handler now resolves `sys.stderr` at write time instead
+  of binding to it once when the handler is first created. The package
+  logger is a process-wide singleton, so the previous binding could
+  outlive whatever `sys.stderr` was current at that first call —
+  redirecting `sys.stderr` afterward (as test runners commonly do) would
+  not reach it.
+
+## [0.5.10] - 2026-09-20
+
+### Changed
+
+- When a type is not empty-consistent but soup per cell is still within
+  3× the empty-cloud UMI knee (barcode-rank knee of empties below the
+  cell/debris inflection), rank-1 uses a full χ take (`protect_scale=0`)
+  and U genes share that take. Skip/cap at true empty-consistent groups
+  is unchanged. The knee is stored on `uns['ambidose']['empty_umi']` as
+  `knee_umi` when χ is estimated. Cells on that path are counted in
+  `n_low_soup_full_chi_cells`. Progress messages use the `ambidose` logger.
+
+### Fixed
+
+- `_native_profile_orthogonal_to_chi` moved from `scripts/run_zero_ambient_control_pbmc.py`
+  into `ambidose._dose`. The test covering it previously loaded that
+  script from disk by path, which fails wherever `scripts/` is not
+  present alongside `tests/` (it is intentionally excluded from the
+  distributed package). The test now imports the function directly from
+  `ambidose._dose`.
+
 ## [0.5.9] - 2026-09-20
 
 ### Changed
 
-- For types whose unexpressed-unowned UMI mass, or estimated soup per
-  cell, matches empty droplets (Poisson), extra-clear and leftover
-  realloc are skipped and rank-1 is capped at empty U-gene soup instead
-  of the full estimated dose. Removal stays low, not zero. Affected cells
-  are counted in `uns["ambidose"]["n_empty_consistent_skip_cells"]`.
+- Zero-ambient PBMC4k control (`scripts/run_zero_ambient_control_pbmc.py`)
+  simulates cells from a native profile orthogonal to empty-droplet χ
+  (`type_mean ≈ α χ + native`), not from the raw 10x type mean. Empties
+  stay real. Pass `--no-orthogonalize` for the old design.
 
 ## [0.5.8] - 2026-09-20
+
+### Changed
+
+- Extra-clear and leftover realloc are skipped, and rank-1 is capped at
+  empty U-gene soup, when a type's unexpressed-unowned mass matches empty
+  droplets, estimated soup per cell is not above the empty mean, or
+  unexpressed genes owned by *other* types match empty (no extra
+  cross-type soup). That last check is the data feature that separates
+  clean cells from barnyard off-species. Affected cells are counted in
+  `uns["ambidose"]["n_empty_consistent_skip_cells"]`.
 
 ### Fixed
 

@@ -437,7 +437,57 @@ def write_report(adata: AnnData, path: str | Path) -> Path:
         if top_genes
         else ""
     )
-    document = f"""<!doctype html><html><head><meta charset="utf-8"><title>AmbiDose QC report</title><style>body{{font:15px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem}}table{{border-collapse:collapse}}th,td{{padding:.35rem .7rem;border:1px solid #ccc;text-align:left}}img{{max-width:100%}}pre{{background:#f5f5f5;padding:1rem;overflow:auto}}.banner{{background:#fff3cd;border:1px solid #ffc107;padding:1rem;margin:1rem 0}}</style></head><body><h1>AmbiDose QC report</h1><div class="banner">{banner}</div><table>{rows}</table><h2>Diagnostics</h2><img alt="AmbiDose summary plots" src="data:image/png;base64,{image}">{type_rows}{gene_rows}<h2>Machine-readable summary</h2><pre>{payload}</pre></body></html>"""
+    background_matched = data.get("diagnostics", {}).get("background_matched_genes")
+    background_matched_identity = data.get("diagnostics", {}).get(
+        "background_matched_group_identity", {}
+    )
+    background_matched_rows = ""
+    if background_matched:
+        max_groups_shown = 100
+        group_ids = list(background_matched.keys())
+        n_groups_total = len(group_ids)
+        group_ids.sort(
+            key=lambda gid: int(background_matched_identity.get(gid, {}).get("n_cells", 0)),
+            reverse=True,
+        )
+        shown_ids = group_ids[:max_groups_shown]
+        groups_html = "".join(
+            f"<tr><td>{escape(str(identity.get('sample', '')) or '(single sample)')}</td>"
+            f"<td>{escape(str(identity.get('type', '')))}</td>"
+            f"<td>{int(identity.get('n_cells', 0))}</td>"
+            f"<td>{escape(str(gene))}</td>"
+            f"<td>{float(mean_umi):.3f}</td>"
+            f"<td>{100.0 * float(detected):.1f}%</td></tr>"
+            for group_id in shown_ids
+            for group in [background_matched[group_id]]
+            for identity in [background_matched_identity.get(group_id, {})]
+            for gene, mean_umi, detected in zip(
+                group.get("gene", []),
+                group.get("mean_umi_per_cell", []),
+                group.get("detection_fraction", []),
+                strict=True,
+            )
+        )
+        truncation_note = (
+            f"<p>Showing the {max_groups_shown} largest of {n_groups_total} groups "
+            "by cell count; see the machine-readable summary for the rest.</p>"
+            if n_groups_total > max_groups_shown
+            else ""
+        )
+        background_matched_rows = (
+            "<h2>Genes left uncorrected as background-consistent</h2>"
+            "<p>These (sample, type) groups had unowned-gene signal that matched "
+            "the empty-droplet background, so AmbiDose skipped extra-clear there. "
+            "If you independently know a listed gene should be absent from that "
+            "cell type (for example, after inspecting marker expression across "
+            "clusters), the residual may be contamination beyond what AmbiDose "
+            "modeled as normal background. This is a diagnosis.</p>"
+            f"{truncation_note}"
+            "<table><tr><th>sample</th><th>type</th><th>n cells</th>"
+            "<th>gene</th><th>mean UMI/cell</th><th>% cells with UMI&gt;0</th></tr>"
+            f"{groups_html}</table>"
+        )
+    document = f"""<!doctype html><html><head><meta charset="utf-8"><title>AmbiDose QC report</title><style>body{{font:15px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem}}table{{border-collapse:collapse}}th,td{{padding:.35rem .7rem;border:1px solid #ccc;text-align:left}}img{{max-width:100%}}pre{{background:#f5f5f5;padding:1rem;overflow:auto}}.banner{{background:#fff3cd;border:1px solid #ffc107;padding:1rem;margin:1rem 0}}</style></head><body><h1>AmbiDose QC report</h1><div class="banner">{banner}</div><table>{rows}</table><h2>Diagnostics</h2><img alt="AmbiDose summary plots" src="data:image/png;base64,{image}">{type_rows}{gene_rows}{background_matched_rows}<h2>Machine-readable summary</h2><pre>{payload}</pre></body></html>"""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(document, encoding="utf-8")

@@ -189,23 +189,49 @@ def _alloc_budget(tgt: float, room: np.ndarray, ws: np.ndarray) -> np.ndarray:
     return np.minimum(out, room)
 
 
+def _soup_first_chi(
+    chi: np.ndarray,
+    native_confidence: np.ndarray,
+    is_u: np.ndarray,
+) -> np.ndarray:
+    """Renormalize χ toward unexpressed and low-confidence genes.
+
+    Used only when the low-soup band already turned protection off. High
+    native confidence would otherwise absorb the rank-1 budget on genes the
+    type expresses, leaving exclusive soup on the χ tail.
+    """
+    chi = np.asarray(chi, dtype=np.float64)
+    conf = np.clip(np.asarray(native_confidence, dtype=np.float64), 0.0, 1.0)
+    weight = np.where(np.asarray(is_u, dtype=bool), 1.0, 1.0 - conf)
+    tilted = chi * weight
+    total = float(tilted.sum())
+    if total <= 0.0:
+        return chi
+    return tilted / total
+
+
 def _confidence_weighted_take(
     observed: np.ndarray,
     chi: np.ndarray,
     dose: float,
     native_confidence: np.ndarray,
     is_u: np.ndarray | None = None,
+    *,
+    protect_scale: float = 1.0,
 ) -> np.ndarray:
     """Rank-1 take scaled by native confidence; optional soupOnly on U genes.
 
     ``dose`` is a χ-direction budget (typically the sum of per-cell ``d_c``
     in the type), not a per-gene allocation of per-cell ``d_c``.
-    Confidence 0 takes ``dose·χ``. Confidence 1 takes ``0.1·dose·χ``.
-    Unexpressed unowned genes (``is_u``) are extra-cleared to the observed
-    count; that extra-clear is outside the rank-1 budget.
+    Confidence 0 takes ``dose·χ``. Confidence 1 takes
+    ``(1 - 0.9·protect_scale)·dose·χ``. ``protect_scale=0`` is a full χ
+    take (low soup vs empty). Unexpressed unowned genes (``is_u``) are
+    extra-cleared to the observed count; that extra-clear is outside the
+    rank-1 budget.
     """
     confidence = np.clip(native_confidence, 0.0, 1.0)
-    protected_take = dose * chi * (1.0 - 0.9 * confidence)
+    scale = float(np.clip(protect_scale, 0.0, 1.0))
+    protected_take = dose * chi * (1.0 - 0.9 * confidence * scale)
     take = np.minimum(observed, protected_take)
     if is_u is not None:
         take = np.where(is_u, observed, take)
@@ -396,8 +422,14 @@ def _alloc_integer_budget_validated(
     return out
 
 
-def _integerize_corrected(raw, corrected, *, gene_keys):
-    """Convert continuous removal to deterministic integer UMI removal per cell."""
+def _integerize_corrected(raw, corrected, *, gene_keys, dose=None):
+    """Convert continuous removal to deterministic integer UMI removal per cell.
+
+    Genes in one cell compete for a single integer budget. When ``dose`` is
+    given, that budget is the continuous removal rounded half up, and it
+    cannot exceed ``floor(d_c)``. No row is scaled back to ``d_c`` after the
+    fact: scaling would return UMIs that extra-clear had already removed.
+    """
     raw = raw.tocsr(copy=False)
     corrected = corrected.tocsr(copy=False)
     if not (
@@ -411,10 +443,25 @@ def _integerize_corrected(raw, corrected, *, gene_keys):
     gene_keys = np.asarray(gene_keys).astype(str)
     if gene_keys.shape != (raw.shape[1],):
         raise ValueError("gene_keys must have length n_vars")
+    dose_v = None if dose is None else np.asarray(dose, dtype=np.float64).ravel()
+    if dose_v is not None and dose_v.shape != (raw.shape[0],):
+        raise ValueError("dose must have one value per cell")
     for row in range(raw.shape[0]):
         start, stop = int(raw.indptr[row]), int(raw.indptr[row + 1])
-        target = int(np.floor(continuous[start:stop].sum() + 0.5))
-        remaining = target - int(removed[start:stop].sum())
+        if start == stop:
+            continue
+        target = int(np.floor(float(continuous[start:stop].sum()) + 0.5))
+        if dose_v is not None and np.isfinite(dose_v[row]):
+            target = min(target, int(np.floor(float(dose_v[row]) + 1e-9)))
+        target = max(target, 0)
+        floor_sum = int(removed[start:stop].sum())
+        if floor_sum > target:
+            room = np.rint(raw.data[start:stop]).astype(np.float64)
+            weights = continuous[start:stop]
+            keys = gene_keys[raw.indices[start:stop]]
+            removed[start:stop] = _alloc_integer_budget(float(target), room, weights, tie_keys=keys)
+            continue
+        remaining = target - floor_sum
         if remaining <= 0:
             continue
         local = np.arange(start, stop)

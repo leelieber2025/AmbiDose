@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import sys
 import warnings
 
 import numpy as np
@@ -28,6 +27,8 @@ from ._shared import (
     _sample_names,
     _sample_storage_id,
     _validated_type_values,
+    get_logger,
+    indices_excluding_high_doublet,
 )
 
 
@@ -230,6 +231,63 @@ def _soup_per_cell_fits_empty(
     return soup <= lam_e + noise_k * np.sqrt(lam_e)
 
 
+def _empty_soup_ceiling(lam_e: float, *, noise_k: float = NOISE_K) -> float:
+    """Per-cell soup mass still compatible with one empty droplet."""
+    if not np.isfinite(lam_e) or lam_e <= 0:
+        return 0.0
+    return float(lam_e + noise_k * np.sqrt(lam_e))
+
+
+def _soup_just_above_empty(
+    rho_t: float, n_bar: float, lam_e: float, *, noise_k: float = NOISE_K
+) -> bool:
+    """True if soup per cell exceeds empty but is still within 3× that ceiling.
+
+    Below the ceiling is empty-consistent (skip). Above 3× the ceiling is
+    enough soup that type protection stays on. The 3× uses the same empty
+    threshold as skip, not a ρ percent cutoff.
+    """
+    ceiling = _empty_soup_ceiling(lam_e, noise_k=noise_k)
+    if ceiling <= 0 or n_bar <= 0:
+        return False
+    soup = float(rho_t) * float(n_bar)
+    if not np.isfinite(soup):
+        return False
+    if soup <= ceiling:
+        return False
+    return soup <= 3.0 * ceiling
+
+
+def _empty_cloud_knee_umi(totals: np.ndarray, empty_idx: np.ndarray) -> float:
+    """UMI knee of the empty cloud, not the cell-calling knee.
+
+    Restrict empties to below the library inflection (cell/debris cut),
+    then take the barcode-rank knee of that floor. The rank curve lives in
+    ``_droplets``; import it lazily so ``_droplets`` can import this module.
+    """
+    totals = np.asarray(totals, dtype=np.float64).ravel()
+    empty_idx = np.asarray(empty_idx, dtype=np.int64).ravel()
+    if empty_idx.size == 0:
+        return 0.0
+    empty_n = totals[empty_idx]
+    if empty_idx.size < 50:
+        return float(np.mean(empty_n))
+    from ._droplets import _barcode_rank_curve
+
+    curve = _barcode_rank_curve(totals, lower=0.0)
+    infl = curve["inflection_umi"]
+    if np.isfinite(infl) and infl > 0:
+        floor = empty_n[empty_n < infl]
+    else:
+        floor = empty_n
+    if floor.size < 50:
+        return float(np.percentile(empty_n, 95)) if empty_n.size else 0.0
+    knee = _barcode_rank_curve(floor, lower=0.0)["knee_umi"]
+    if not np.isfinite(knee) or knee <= 0:
+        return float(np.percentile(floor, 95))
+    return float(knee)
+
+
 def _empty_consistent_rank1_budget(
     d_sum: float,
     n_cells: int,
@@ -429,6 +487,8 @@ def _native_everywhere_mask(
     mask: np.ndarray,
     *,
     max_type_mean: float | None,
+    doublet_scores: np.ndarray | None = None,
+    doublet_exclude_q: float | None = None,
 ) -> np.ndarray:
     """Drop genes that look native in every type, not true soup.
 
@@ -444,6 +504,7 @@ def _native_everywhere_mask(
         idx = np.flatnonzero(mask & (types == t))
         if idx.size == 0:
             continue
+        idx = indices_excluding_high_doublet(idx, doublet_scores, doublet_exclude_q)
         mean = np.asarray(x[idx].mean(axis=0)).ravel()
         n_bar = float(n[idx].mean())
         expected = n_bar * chi
@@ -493,6 +554,7 @@ def estimate_dose(
     cell_label: str = "cell",
     layer: str | None = None,
     sample_key: str | None = None,
+    doublet_exclude_q: float | None = None,
 ) -> np.ndarray:
     """Per-cell absolute ambient dose ``d_c = ρ_c · n_c``.
 
@@ -595,6 +657,9 @@ def estimate_dose(
     else:
         groups = list(pd.unique(samples))
         sample_of = samples
+    doublet_scores = None
+    if doublet_exclude_q is not None and "ambidose_doublet_score" in adata.obs.columns:
+        doublet_scores = adata.obs["ambidose_doublet_score"].to_numpy(dtype=np.float64)
 
     for s in groups:
         chi = _chi_for_obs(
@@ -630,12 +695,14 @@ def estimate_dose(
         # ceiling in every type and stays in the pool. See
         # _native_everywhere_mask.
         native_everywhere = _native_everywhere_mask(
-            x, n, chi, types, in_s, max_type_mean=max_type_mean
+            x, n, chi, types, in_s, max_type_mean=max_type_mean,
+            doublet_scores=doublet_scores, doublet_exclude_q=doublet_exclude_q,
         )
         for t in sample_types:
             idx = np.flatnonzero(in_s & (types == t))
             if idx.size == 0:
                 continue
+            idx = indices_excluding_high_doublet(idx, doublet_scores, doublet_exclude_q)
             mean = np.asarray(x[idx].mean(axis=0)).ravel()
             n_bar = float(n[idx].mean()) if idx.size else 0.0
             u_t = _soup_u_mask(
@@ -690,9 +757,7 @@ def estimate_dose(
         if fin.size == 0:
             rho[idx_all] = 0.0
             shrink_w[idx_all] = 0.0
-            print(
-                f"ambidose: no finite ρ_raw in sample {s_label!r}; dose set to 0", file=sys.stderr
-            )
+            get_logger().info("ambidose: no finite ρ_raw in sample %r; dose set to 0", s_label)
             diag_samples[sample_id] = {
                 "n_cell": int(idx_all.size),
                 "mu_log_rho": float("nan"),
@@ -939,6 +1004,7 @@ def estimate_dose_adaptive(
     min_chi: float = 1e-6,
     min_valid: int = MIN_VALID,
     evidence_mode: str = "exposure",
+    doublet_exclude_q: float | None = None,
 ) -> np.ndarray:
     """Select fixed dose on agreement and mixture dose on large disagreement.
 
@@ -958,6 +1024,7 @@ def estimate_dose_adaptive(
         min_chi=min_chi,
         min_valid=min_valid,
         evidence_mode=evidence_mode,
+        doublet_exclude_q=doublet_exclude_q,
     )
     fixed_dose_meta = copy.deepcopy(adata.uns.get("ambidose", {}).get("dose", {}))
     estimate_dose_mixture(
@@ -971,6 +1038,7 @@ def estimate_dose_adaptive(
         fallback_top_n=top_n,
         fallback_min_chi=min_chi,
         fallback_min_valid=min_valid,
+        doublet_exclude_q=doublet_exclude_q,
     )
     selection_summary = diagnose_dose_disagreement(
         adata,
@@ -1058,3 +1126,33 @@ def estimate_dose_mixture(*args, **kwargs):
     from ._mixture import estimate_dose_mixture as _impl
 
     return _impl(*args, **kwargs)
+
+
+def _native_profile_orthogonal_to_chi(
+    type_mean: np.ndarray, chi: np.ndarray
+) -> tuple[np.ndarray, float]:
+    """Nonnegative native profile after removing the χ direction.
+
+    ``type_mean ≈ α χ + native``, ``α = clip(⟨type_mean, χ⟩ / ⟨χ, χ⟩, 0, 1)``,
+    ``native = clip(type_mean - α χ, 0)`` then L1-normalized. Simulation
+    support for constructing a ground-truth native profile orthogonal to a
+    known ambient composition (e.g. a zero-ambient negative control); not
+    part of the `denoise()`/`subtract()` estimation path itself.
+    """
+    type_mean = np.asarray(type_mean, dtype=np.float64)
+    chi = np.asarray(chi, dtype=np.float64)
+    denom = float(np.dot(chi, chi))
+    if denom <= 0 or type_mean.sum() <= 0:
+        p = (
+            type_mean / type_mean.sum()
+            if type_mean.sum() > 0
+            else np.full(type_mean.size, 1.0 / type_mean.size)
+        )
+        return p, 0.0
+    alpha = float(np.clip(np.dot(type_mean, chi) / denom, 0.0, 1.0))
+    native = np.clip(type_mean - alpha * chi, 0.0, None)
+    s = float(native.sum())
+    if s <= 0:
+        p = type_mean / type_mean.sum()
+        return p, alpha
+    return native / s, alpha

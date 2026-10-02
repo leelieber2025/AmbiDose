@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import multiprocessing
-import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -69,6 +68,7 @@ from ._shared import (
     _stable_count_order,
     _usable_cpu_count,
     _validated_sample_values,
+    get_logger,
 )
 from ._shared import (
     SHRINK_K as SHRINK_K,
@@ -969,10 +969,7 @@ def call_cells(
             f"cell calling must leave at least {min_empty} non-cell candidates; got {n_noncell}"
         )
     names = adata.obs_names.astype(str).to_numpy()[keep].tolist()
-    print(
-        f"ambidose: called {len(names)} cells (method={method}{extra})",
-        file=sys.stderr,
-    )
+    get_logger().info("ambidose: called %s cells (method=%s%s)", len(names), method, extra)
     if path is not None:
         out = Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -1026,7 +1023,7 @@ def mark_doublets(
             sc.pp.scrublet(sub, **kw)
         except (ValueError, RuntimeError) as exc:
             status = "scrublet_error"
-            print(f"scrublet skipped ({n_cell} cells, {sub.n_vars} genes): {exc}")
+            get_logger().info("scrublet skipped (%s cells, %s genes): %s", n_cell, sub.n_vars, exc)
         else:
             status = "ok"
             scores[is_cell] = np.asarray(sub.obs["doublet_score"], dtype=np.float64)

@@ -27,7 +27,7 @@ raw droplets + filtered cell barcodes
                  ▼
      subtract (type-constrained):
      rank-1 along χ + soupOnly
-     (soupOnly may exceed d_c)
+     (rank-1 and soupOnly together ≤ d_c)
 ```
 
 Empty droplets determine the ambient composition $\chi_s$ for each sample. Each cell receives an operational scale $\rho_c$ and $\chi$-direction dose $d_c=\rho_c n_c$ (the rank-1 budget along $\chi_s$; soupOnly extra-clear is limited to remaining $d_c$). The standard workflow (`denoise()`) writes non-negative integer counts to `adata.layers["ambidose_denoised"]` and, as its last step, also sets them as `adata.X` -- the original input moves to `adata.layers["raw_counts"]`.

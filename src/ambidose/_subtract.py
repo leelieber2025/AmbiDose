@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import warnings
 
 import numpy as np
@@ -24,10 +23,13 @@ from ._budget import (
     _pre_enrich_sat_mask,
     _revoke_u_with_expressing_subset,
     _selected_data_positions,
+    _soup_first_chi,
 )
 from ._dose import (
+    _empty_cloud_knee_umi,
     _empty_consistent_rank1_budget,
     _native_everywhere_mask,
+    _soup_just_above_empty,
     _soup_per_cell_fits_empty,
     _soup_u_mask,
     _u_mass_fits_empty_droplets,
@@ -43,6 +45,7 @@ from ._ownership import (
     _revoke_u_if_rt_winner,
     _strip_ambient_level_owners,
     _type_masks,
+    _type_means,
 )
 from ._shared import (
     DOSE_KEY,
@@ -63,6 +66,8 @@ from ._shared import (
     _validate_output_layer,
     _validated_sample_values,
     _validated_type_values,
+    get_logger,
+    indices_excluding_high_doublet,
 )
 from ._typing import _default_type_key
 
@@ -87,6 +92,7 @@ def subtract(
     cap_high_u_to_remaining: bool = True,
     high_u_remaining_multiplier: float = 1.0,
     n_jobs: int | None = None,
+    doublet_exclude_q: float | None = None,
 ) -> AnnData:
     """Subtract a rank-1 take along χ, plus extra-clear of unexpressed unowned genes.
 
@@ -229,6 +235,8 @@ def subtract(
             sample_native: dict[str, list[int]] = {}
             sample_tiny = 0
             sample_empty_skip = 0
+            sample_layer2 = 0
+            sample_background_matched: list[dict] = []
             chi = _chi_for_obs(
                 adata,
                 sample_key=sample_key if s is not None else None,
@@ -239,20 +247,32 @@ def subtract(
             empty_idx_s = np.flatnonzero(in_s & ~is_cell)
             if empty_idx_s.size:
                 lam_e = float(n[empty_idx_s].mean())
+                knee_e = _empty_cloud_knee_umi(n, empty_idx_s)
             else:
                 recs = adata.uns.get("ambidose", {}).get("empty_umi", {})
                 rec = recs.get(_sample_storage_id(None if s is None else str(s)), {})
                 if not rec and recs:
                     rec = next(iter(recs.values()))
                 lam_e = float(rec["lam_e"]) if rec.get("lam_e") is not None else 0.0
+                stored_knee = rec.get("knee_umi") if rec else None
+                knee_e = float(stored_knee) if stored_knee is not None else lam_e
             types_s_all = np.where(in_s, types, EMPTY_TYPE)
             type_names_s = list(pd.unique(types[in_s]))
             type_indices_s = {t: np.flatnonzero(in_s & (types == t)) for t in type_names_s}
-            type_means_s = {
-                t: np.asarray(x[idx_t].mean(axis=0)).ravel()
-                for t, idx_t in type_indices_s.items()
-                if t not in EMPTY_TYPES and idx_t.size > 0
-            }
+            doublet_scores = None
+            if doublet_exclude_q is not None and "ambidose_doublet_score" in adata.obs.columns:
+                doublet_scores = adata.obs["ambidose_doublet_score"].to_numpy(dtype=np.float64)
+            mean_types = types_s_all.copy()
+            if doublet_scores is not None and doublet_exclude_q is not None:
+                for t, idx_t in type_indices_s.items():
+                    if t in EMPTY_TYPES or idx_t.size == 0:
+                        continue
+                    kept = indices_excluding_high_doublet(idx_t, doublet_scores, doublet_exclude_q)
+                    if kept.size == idx_t.size:
+                        continue
+                    dropped = np.setdiff1d(idx_t, kept, assume_unique=False)
+                    mean_types[dropped] = EMPTY_TYPE
+            type_means_s = _type_means(x, mean_types)
             type_means = {
                 t: type_means_s[t]
                 for t, idx_t in type_indices_s.items()
@@ -293,6 +313,8 @@ def subtract(
                 types_s_all,
                 in_s,
                 max_type_mean=max_type_mean,
+                doublet_scores=doublet_scores,
+                doublet_exclude_q=doublet_exclude_q,
             )
             extra_protect_s: dict[str, np.ndarray] = {}
             if cross_type_anchor:
@@ -329,6 +351,8 @@ def subtract(
                 leftover_cap = None
                 rank1_budget = d_sum
                 anchor_u = np.zeros(adata.n_vars, dtype=bool)
+                fits_empty = False
+                n_bar_t = float(n_idx.mean()) if idx.size else 0.0
                 if t in EMPTY_TYPES:
                     is_u = np.zeros(adata.n_vars, dtype=bool)
                     is_p = np.zeros(adata.n_vars, dtype=bool)
@@ -395,9 +419,21 @@ def subtract(
                     take_sw = _confidence_weighted_take(y_cl, chi, d_sum, conf_sw, None)
                     take_sw = np.where(is_u_sw, 0.0, take_sw)
                     leftover_cap = max(0.0, d_sum - float(np.sum(take_sw)))
-                    fits_empty = _u_mass_fits_empty_droplets(
-                        x, idx, empty_idx_s, is_u, lam_e=lam_e, chi=chi
-                    ) or _soup_per_cell_fits_empty(rho_t, n_bar_t, lam_e)
+                    other_u = np.zeros(adata.n_vars, dtype=bool)
+                    for t2, mask_t2 in dominant_masks.items():
+                        if t2 != t:
+                            other_u |= is_u & np.asarray(mask_t2, dtype=bool)
+                    # Other-type-owned U is real cross-type soup when it exceeds
+                    # empty droplets. If it matches empty, estimated dose is χ
+                    # overlapping native (clean cells, no extra soup).
+                    cross_fits_empty = other_u.any() and _u_mass_fits_empty_droplets(
+                        x, idx, empty_idx_s, other_u, lam_e=lam_e, chi=chi
+                    )
+                    fits_empty = (
+                        _u_mass_fits_empty_droplets(x, idx, empty_idx_s, is_u, lam_e=lam_e, chi=chi)
+                        or _soup_per_cell_fits_empty(rho_t, n_bar_t, lam_e)
+                        or cross_fits_empty
+                    )
                     if fits_empty:
                         rank1_budget = _empty_consistent_rank1_budget(
                             d_sum,
@@ -408,15 +444,63 @@ def subtract(
                             lam_e=lam_e,
                             chi=chi,
                         )
+                        if is_u.any():
+                            u_idx_all = np.flatnonzero(is_u)
+                            u_mean_all = y_cl[u_idx_all] / max(idx.size, 1)
+                            keep = u_mean_all > 0
+                            if keep.any():
+                                u_idx = u_idx_all[keep]
+                                u_mean = u_mean_all[keep]
+                                order = np.argsort(-u_mean)[:10]
+                                top_idx = u_idx[order]
+                                top_mean = u_mean[order]
+                                detected = np.asarray((x[idx][:, top_idx] > 0).sum(axis=0)).ravel()
+                                detection_fraction = detected / max(idx.size, 1)
+                                sample_background_matched.append(
+                                    {
+                                        "sample": "" if s is None else str(s),
+                                        "type": str(t),
+                                        "n_cells": int(idx.size),
+                                        "gene": [str(gene_keys[i]) for i in top_idx],
+                                        "mean_umi_per_cell": [float(v) for v in top_mean],
+                                        "detection_fraction": [
+                                            float(v) for v in detection_fraction
+                                        ],
+                                    }
+                                )
                         is_u = np.zeros(adata.n_vars, dtype=bool)
                         leftover_cap = 0.0
                         sample_empty_skip += int(idx.size)
                 d_idx = d_v[idx]
                 # Rank-1 along χ; extra-clear of unexpressed unowned genes follows.
+                # Layer 1 (fits_empty): skip extra-clear, capped rank-1, U wiped.
+                # Layer 2 (soup just above the empty-cloud knee, ≤3× ceiling):
+                # SoupX-like χ take. Layer 3 (more soup): full native-χ protection.
+                # Skip still uses mean empty; the knee is only this gate.
+                protect_scale = (
+                    0.0
+                    if (not fits_empty) and _soup_just_above_empty(rho_t, n_bar_t, knee_e)
+                    else 1.0
+                )
+                if protect_scale == 0.0 and not fits_empty:
+                    sample_layer2 += int(idx.size)
+                chi_take = (
+                    _soup_first_chi(chi, native_confidence, is_u)
+                    if protect_scale == 0.0 and not fits_empty
+                    else chi
+                )
                 take_rank1 = _confidence_weighted_take(
-                    y_cl, chi, rank1_budget, native_confidence, None
+                    y_cl,
+                    chi_take,
+                    rank1_budget,
+                    native_confidence,
+                    None,
+                    protect_scale=protect_scale,
                 )
                 take_rank1 = np.where(is_u, 0.0, take_rank1)
+                if (not fits_empty) and is_u.any() and protect_scale < 1.0:
+                    u_chi = np.minimum(y_cl, rank1_budget * chi_take)
+                    take_rank1 = np.where(is_u, (1.0 - protect_scale) * u_chi, take_rank1)
                 ambient_support = _ambient_slope_support(x, idx, n, chi, d_idx)
                 take_rank1 = _migrate_unspent_rank1(
                     take_rank1,
@@ -487,16 +571,34 @@ def subtract(
                     separators=(",", ":"),
                 )
                 sample_native[group_key] = np.flatnonzero(is_p).tolist()
-            return sample_native, sample_n_meta, sample_tiny, sample_empty_skip
+            return (
+                sample_native,
+                sample_n_meta,
+                sample_tiny,
+                sample_empty_skip,
+                sample_layer2,
+                knee_e,
+                sample_background_matched,
+            )
 
         sample_results = list(map(process_sample, groups))
         native_internal: dict[str, list[int]] = {}
         meta_groups_by_sample: dict[str, dict] = {}
         total_meta_groups = 0
-        for sample, (sample_native, sample_n_meta, sample_tiny, sample_empty_skip) in zip(
-            groups, sample_results, strict=True
-        ):
+        n_layer2 = 0
+        background_matched_genes: list[dict] = []
+        empty_umi = dict(adata.uns.get("ambidose", {}).get("empty_umi", {}))
+        for sample, (
+            sample_native,
+            sample_n_meta,
+            sample_tiny,
+            sample_empty_skip,
+            sample_layer2,
+            knee_e,
+            sample_background_matched,
+        ) in zip(groups, sample_results, strict=True):
             native_internal.update(sample_native)
+            background_matched_genes.extend(sample_background_matched)
             sample_id = _sample_storage_id(None if sample is None else str(sample))
             meta_groups_by_sample[sample_id] = {
                 "sample": "" if sample is None else str(sample),
@@ -507,6 +609,12 @@ def subtract(
             total_meta_groups += sample_n_meta
             n_tiny_protected += sample_tiny
             n_empty_skip += sample_empty_skip
+            n_layer2 += sample_layer2
+            if np.isfinite(knee_e) and knee_e > 0:
+                rec = dict(empty_umi.get(sample_id, {}))
+                rec.setdefault("sample", "" if sample is None else str(sample))
+                rec["knee_umi"] = float(knee_e)
+                empty_umi[sample_id] = rec
         native_idx_by_type: dict[str, list[int]] = {}
         native_group_identity: dict[str, dict] = {}
         for i, identity_key in enumerate(sorted(native_internal)):
@@ -527,13 +635,42 @@ def subtract(
         uns["max_meta_groups_per_sample"] = int(n_meta_groups)
         uns["n_tiny_protected_cells"] = int(n_tiny_protected)
         uns["n_empty_consistent_skip_cells"] = int(n_empty_skip)
+        uns["n_low_soup_full_chi_cells"] = int(n_layer2)
+        uns["empty_umi"] = empty_umi
+        if background_matched_genes:
+            bg_identity: dict[str, dict] = {}
+            bg_genes: dict[str, dict] = {}
+            for i, entry in enumerate(background_matched_genes):
+                group_id = f"bgmatch_{i:06d}"
+                bg_identity[group_id] = {
+                    "sample": entry["sample"],
+                    "type": entry["type"],
+                    "n_cells": entry["n_cells"],
+                }
+                bg_genes[group_id] = {
+                    "gene": entry["gene"],
+                    "mean_umi_per_cell": entry["mean_umi_per_cell"],
+                    "detection_fraction": entry["detection_fraction"],
+                }
+            uns["background_matched_group_identity"] = bg_identity
+            uns["background_matched_genes"] = bg_genes
+            uns["background_matched_genes_note"] = (
+                "For these (sample, type) groups, unowned-gene UMI mass matched "
+                "the empty-droplet background, so extra-clear was skipped; the "
+                "listed genes are the top unowned genes by mean UMI/cell that "
+                "were left uncorrected in that group. If post-clustering marker "
+                "inspection shows a listed gene where it should not be "
+                "biologically present, treat that as independent evidence of "
+                "residual ambient contamination beyond what AmbiDose modeled as "
+                "background. This is a diagnosis."
+            )
         adata.uns["ambidose"] = uns
         if n_tiny_protected:
-            print(
-                f"ambidose: {n_tiny_protected} cells in groups "
-                f"<{MIN_TYPE_CELLS} cells; extra-clear skipped "
+            get_logger().info(
+                "ambidose: %s cells in groups <%s cells; extra-clear skipped "
                 "(rank-1 protected take only)",
-                file=sys.stderr,
+                n_tiny_protected,
+                MIN_TYPE_CELLS,
             )
 
     if clip_negative:
@@ -542,7 +679,7 @@ def subtract(
         # low-χ U and at the configured soft allowance for high-χ U.
         # Do not scale the whole row back to d_c: that put soup UMIs back
         # after they were cleared. Rank-1 take is already bounded by d_c.
-        x = _integerize_corrected(raw_x, x, gene_keys=gene_keys)
+        x = _integerize_corrected(raw_x, x, gene_keys=gene_keys, dose=d_v)
         from .io import cast_int32_counts
 
         x.data = cast_int32_counts(x.data)

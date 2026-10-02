@@ -1,7 +1,8 @@
 cff-version: 1.2.0
 title: "AmbiDose: per-cell ambient dose removal for droplet scRNA-seq"
 message: >-
-  If you use this software, please cite it using the metadata below.
+  If you use this software, please cite the bioRxiv preprint
+  (preferred-citation) and the software record below.
 type: software
 authors:
   - family-names: "Li"
@@ -16,9 +17,29 @@ identifiers:
     value: 10.5281/zenodo.22278199
     description: >-
       Concept DOI representing all versions; always resolves to the latest release.
+  - type: doi
+    value: 10.64898/2026.09.27.754849
+    description: bioRxiv preprint.
 license: Apache-2.0
-version: 0.5.9
-date-released: "2026-09-20"
+version: 0.5.12
+date-released: "2026-10-02"
+preferred-citation:
+  type: article
+  title: "AmbiDose: per-cell removal budgets for ambient RNA contamination"
+  authors:
+    - family-names: "Li"
+      given-names: "Zhao"
+      orcid: "https://orcid.org/0000-0002-9276-9129"
+    - family-names: "James"
+      given-names: "Aaron W."
+      orcid: "https://orcid.org/0000-0002-2002-622X"
+    - family-names: "Li"
+      given-names: "Shengxuan"
+  year: 2026
+  month: 9
+  journal: bioRxiv
+  doi: 10.64898/2026.09.27.754849
+  url: "https://www.biorxiv.org/content/10.64898/2026.09.27.754849v1"
 keywords:
   - single-cell
   - RNA-seq

@@ -408,12 +408,11 @@ def _cross_type_anchor_mask(
 
 
 def _type_means(x, types: np.ndarray) -> dict[str, np.ndarray]:
-    """Per-type mean expression, GLOBAL across the whole object (all samples).
+    """Per-type mean on the rows of one sample.
 
-    One evaluation of the type catalog per ``subtract()`` call, matching the
-    project's own "aggregate by label across the current object" convention
-    -- computed once and reused for every (sample, type) pair in the main
-    loop, not recomputed per sample.
+    Call once per sample. Cells from every other sample must already be
+    ``EMPTY_TYPE`` (or omitted). The same type label in another sample does
+    not enter these means.
     """
     means: dict[str, np.ndarray] = {}
     for t in pd.unique(types):

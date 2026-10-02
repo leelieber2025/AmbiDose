@@ -23,7 +23,20 @@ from ._shared import (
     _resolve_cell_mask,
     _sample_names,
     _validated_type_values,
+    indices_excluding_high_doublet,
 )
+
+
+def _type_sums_for_mean(x, in_sample, types, sample_types, doublet_scores, q):
+    out = {}
+    for t in sample_types:
+        idx = np.flatnonzero(in_sample & (types == t))
+        idx = indices_excluding_high_doublet(idx, doublet_scores, q)
+        if idx.size == 0:
+            out[t] = np.zeros(x.shape[1], dtype=np.float64)
+        else:
+            out[t] = np.asarray(x[idx].sum(axis=0)).ravel().astype(np.float64)
+    return out
 
 
 def _tv_distance(left: np.ndarray, right: np.ndarray) -> float:
@@ -208,6 +221,7 @@ def estimate_dose_mixture(
     fallback_top_n: int | None = None,
     fallback_min_chi: float = 1e-6,
     fallback_min_valid: int = MIN_VALID,
+    doublet_exclude_q: float | None = None,
 ) -> np.ndarray:
     """Estimate dose from native and contamination profiles.
 
@@ -255,6 +269,9 @@ def estimate_dose_mixture(
     profile = np.full(adata.n_obs, "not_evaluated", dtype=object)
     status = np.full(adata.n_obs, "not_evaluated", dtype=object)
     n_genes_ev = np.zeros(adata.n_obs, dtype=np.int64)
+    doublet_scores = None
+    if doublet_exclude_q is not None and "ambidose_doublet_score" in adata.obs.columns:
+        doublet_scores = adata.obs["ambidose_doublet_score"].to_numpy(dtype=np.float64)
     for sample in groups:
         chi = None
         if CHI_KEY in adata.var.columns or CHI_KEY in adata.uns:
@@ -263,10 +280,9 @@ def estimate_dose_mixture(
             )
         in_sample = is_cell & (sample_of == sample)
         sample_types = [t for t in pd.unique(types[in_sample]) if t not in EMPTY_TYPES]
-        type_sums = {
-            t: np.asarray(x[in_sample & (types == t)].sum(axis=0)).ravel().astype(np.float64)
-            for t in sample_types
-        }
+        type_sums = _type_sums_for_mean(
+            x, in_sample, types, sample_types, doublet_scores, doublet_exclude_q
+        )
         type_profiles = {t: _simplex(type_sums[t], pseudocount) for t in sample_types}
         total_profile = (
             np.sum(list(type_sums.values()), axis=0)

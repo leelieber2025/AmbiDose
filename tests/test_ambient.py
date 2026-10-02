@@ -144,6 +144,18 @@ def test_barcode_rank_inflection_below_knee_on_cliff():
     assert 50 < c["n_inflection"] < 200
 
 
+def test_empty_cloud_knee_is_empty_shoulder_not_cell_knee():
+    from ambidose._dose import _empty_cloud_knee_umi
+
+    rng = np.random.default_rng(0)
+    cells = rng.integers(800, 2000, size=80).astype(np.float64)
+    empty = rng.integers(5, 40, size=400).astype(np.float64)
+    totals = np.concatenate([cells, empty])
+    empty_idx = np.arange(80, 480)
+    knee = _empty_cloud_knee_umi(totals, empty_idx)
+    assert 5 < knee < 80
+
+
 def test_call_cells_diem_keeps_typed_cells():
     from anndata import AnnData
     from scipy import sparse

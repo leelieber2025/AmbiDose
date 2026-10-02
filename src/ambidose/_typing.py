@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -63,6 +61,7 @@ from ._shared import (
     _stable_subsample_indices,
     _validated_sample_values,
     _validated_type_values,
+    get_logger,
 )
 from ._shared import (
     SHRINK_K as SHRINK_K,
@@ -166,7 +165,7 @@ def _resolve_coarse_resolution(
             "or run with more memory"
         ) from orig
     except (ValueError, np.linalg.LinAlgError) as orig:
-        print(f"clustering prep skipped ({orig}); using cluster_cells", file=sys.stderr)
+        get_logger().info("clustering prep skipped (%s); using cluster_cells", orig)
         _record_cluster_diag(adata, prep_fallback=True, prep_error=f"{type(orig).__name__}: {orig}")
         return done(fallback)
 
