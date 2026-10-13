@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+## [0.5.13] - 2026-10-13
+
+### Added
+
+- A non-dominant type can be refit with one native profile per Leiden
+  sub-group. The sub-group ρ replaces the whole-type ρ only when it lies
+  closer to that type's cross-type reading. The largest type is never
+  split. `obs['ambidose_mixture_split']` marks cells that used the
+  sub-group fit.
+- `obs['ambidose_rho_trust']` can be `level_risk` when a type's executed
+  ρ is more than twice its cross-type reading. The flag does not change
+  dose, ρ, or corrected counts. The per-type table is
+  `uns['ambidose']['trust']['level_check']`.
+
+### Changed
+
+- When the fixed dose estimate exceeds the mixture estimate beyond
+  Poisson error, executed ρ is `ρ_mix / (1 - ρ_fixed + ρ_mix)`. It lies
+  between the two estimates. Mixture-higher disagreement and agreement
+  are unchanged. The selection summary records `n_blended`.
+- Within one sample, fixed-dose estimation scans each type's counts once
+  and reuses that profile. Selecting the executed dose reuses
+  `obs['n_umi']` from that scan.
+
+### Fixed
+
+- `eval_0p36_datasets.py --job kidney` and `--job fetal` keep
+  `uns['ambidose']['empty_umi']` already stored on the phase-1 objects
+  when the separate empty-mean cache file is absent.
+
 ## [0.5.12] - 2026-10-02
 
 ### Fixed

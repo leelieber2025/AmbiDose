@@ -479,6 +479,54 @@ def _dose_quantile_from_chi(
     return dose
 
 
+def _type_gene_stats(
+    x,
+    n: np.ndarray,
+    types: np.ndarray,
+    mask: np.ndarray,
+    *,
+    doublet_scores: np.ndarray | None = None,
+    doublet_exclude_q: float | None = None,
+) -> dict:
+    """One mean profile per type inside ``mask``. Scanned once per sample."""
+    stats = {}
+    for t in pd.unique(types[mask]):
+        if t in EMPTY_TYPES:
+            continue
+        idx = np.flatnonzero(mask & (types == t))
+        if idx.size == 0:
+            continue
+        idx = indices_excluding_high_doublet(idx, doublet_scores, doublet_exclude_q)
+        if idx.size == 0:
+            continue
+        stats[t] = (
+            idx,
+            np.asarray(x[idx].mean(axis=0)).ravel(),
+            float(n[idx].mean()),
+        )
+    return stats
+
+
+def _native_everywhere_from_stats(
+    stats: dict,
+    chi: np.ndarray,
+    n_vars: int,
+    *,
+    max_type_mean: float | None,
+) -> np.ndarray:
+    above = []
+    collide = []
+    for _t, (_idx, mean, n_bar) in stats.items():
+        expected = n_bar * chi
+        unexp = _unexpressed_mask(mean, expected, _idx.size, max_type_mean=max_type_mean)
+        above.append(~unexp)
+        r_t = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
+        collide.append((n_bar > 0) & (mean > U_MAX_LIBRARY_FRAC * n_bar) & (r_t > 0.85))
+    if len(above) < 2:
+        return np.zeros(n_vars, dtype=bool)
+    return np.vstack(above).all(axis=0) | np.vstack(collide).all(axis=0)
+
+
 def _native_everywhere_mask(
     x,
     n: np.ndarray,
@@ -496,27 +544,15 @@ def _native_everywhere_mask(
     Housekeeping exceeds that ceiling in every type. Genes on the ceiling
     in every type that also take a large library fraction are dropped.
     """
-    above = []
-    collide = []
-    for t in pd.unique(types[mask]):
-        if t in EMPTY_TYPES:
-            continue
-        idx = np.flatnonzero(mask & (types == t))
-        if idx.size == 0:
-            continue
-        idx = indices_excluding_high_doublet(idx, doublet_scores, doublet_exclude_q)
-        mean = np.asarray(x[idx].mean(axis=0)).ravel()
-        n_bar = float(n[idx].mean())
-        expected = n_bar * chi
-        unexp = _unexpressed_mask(mean, expected, idx.size, max_type_mean=max_type_mean)
-        above.append(~unexp)
-        r_t = np.divide(mean, expected, out=np.zeros_like(mean), where=expected > 0)
-        collide.append((n_bar > 0) & (mean > U_MAX_LIBRARY_FRAC * n_bar) & (r_t > 0.85))
-    if len(above) < 2:
-        return np.zeros(x.shape[1], dtype=bool)
-    stacked_above = np.vstack(above)
-    stacked_collide = np.vstack(collide)
-    return stacked_above.all(axis=0) | stacked_collide.all(axis=0)
+    stats = _type_gene_stats(
+        x,
+        n,
+        types,
+        mask,
+        doublet_scores=doublet_scores,
+        doublet_exclude_q=doublet_exclude_q,
+    )
+    return _native_everywhere_from_stats(stats, chi, x.shape[1], max_type_mean=max_type_mean)
 
 
 def _atomic_obs_uns(func):
@@ -694,23 +730,22 @@ def estimate_dose(
         # ceiling, or MALAT1-like collision). True soup sits at/below that
         # ceiling in every type and stays in the pool. See
         # _native_everywhere_mask.
-        native_everywhere = _native_everywhere_mask(
+        type_stats = _type_gene_stats(
             x,
             n,
-            chi,
             types,
             in_s,
-            max_type_mean=max_type_mean,
             doublet_scores=doublet_scores,
             doublet_exclude_q=doublet_exclude_q,
         )
+        native_everywhere = _native_everywhere_from_stats(
+            type_stats, chi, x.shape[1], max_type_mean=max_type_mean
+        )
         for t in sample_types:
-            idx = np.flatnonzero(in_s & (types == t))
-            if idx.size == 0:
+            cached = type_stats.get(t)
+            if cached is None:
                 continue
-            idx = indices_excluding_high_doublet(idx, doublet_scores, doublet_exclude_q)
-            mean = np.asarray(x[idx].mean(axis=0)).ravel()
-            n_bar = float(n[idx].mean()) if idx.size else 0.0
+            idx, mean, n_bar = cached
             u_t = _soup_u_mask(
                 mean,
                 chi,
@@ -870,10 +905,13 @@ def diagnose_dose_disagreement(
     cell_label: str = "cell",
     layer: str | None = None,
 ) -> dict[str, float | int]:
-    """Use fixed dose on agreement and mixture dose on large disagreement.
+    """Use fixed dose on agreement and a mixture-based dose on large disagreement.
 
-    Default: mixture wins when |ρ gap| exceeds Poisson sampling error of
-    the two estimates (``NOISE_K * sqrt(se_fixed² + se_mix²)``, se² = ρ/n).
+    Default: disagreement is declared when |ρ gap| exceeds Poisson sampling
+    error of the two estimates (``NOISE_K * sqrt(se_fixed² + se_mix²)``,
+    se² = ρ/n). With the fixed estimate above the mixture estimate the
+    selected ρ is ``ρ_mix / (1 - ρ_fixed + ρ_mix)``, which lies between the
+    two; with the mixture estimate above, the mixture estimate is kept.
     Explicit ``fold_threshold`` / ``rho_gap_threshold`` remain for tests.
     """
     _reject_view(adata, "diagnose_dose_disagreement")
@@ -960,7 +998,18 @@ def diagnose_dose_disagreement(
     adata.obs["ambidose_dose_rho_gap"] = rho_gap
     adata.obs["ambidose_dose_disagreement"] = large
     adata.obs["ambidose_dose_diagnosis"] = direction
-    adata.obs["ambidose_dose_selected"] = np.where(large, mixture, fixed)
+    # Fixed above mixture: the fixed estimate is inflated by native counts in
+    # the unexpressed set and the mixture estimate is deflated by absorbing
+    # shared ambient into the native profile. Take ρ = w·ρ_fixed + (1-w)·ρ_mix
+    # with w = ρ (self-consistent), i.e. ρ_mix / (1 - ρ_fixed + ρ_mix). The
+    # result lies between the two estimates and equals both when they agree.
+    # Mixture above fixed keeps the mixture estimate.
+    blend_rho = mixture_rho / np.maximum(1.0 - fixed_rho + mixture_rho, eps)
+    blend = np.minimum(blend_rho * n, n)
+    use_blend = large & (fixed_rho > mixture_rho)
+    selected = np.where(large, mixture, fixed)
+    selected = np.where(use_blend, blend, selected)
+    adata.obs["ambidose_dose_selected"] = selected
     n_eligible = int(eligible.sum())
     summary: dict[str, float | int] = {
         "n_cells": n_eligible,
@@ -971,6 +1020,7 @@ def diagnose_dose_disagreement(
         "median_abs_rho_gap": float(np.median(rho_gap[eligible])) if n_eligible else 0.0,
         "n_fixed_high": int(np.sum(direction == "fixed_high")),
         "n_mixture_high": int(np.sum(direction == "mixture_high")),
+        "n_blended": int(use_blend.sum()),
         "n_disagreement_unconverged_kept_fixed": n_unconverged_blocked,
         "fold_cut_log2": float(fold_cut),
         "rho_gap_cut": float(gap_cut),
@@ -1055,9 +1105,12 @@ def estimate_dose_adaptive(
         layer=layer,
     )
     selected = adata.obs["ambidose_dose_selected"].to_numpy(dtype=np.float64)
-    n = np.asarray(
-        _as_csr(adata.layers[layer] if layer is not None else adata.X).sum(axis=1)
-    ).ravel()
+    if "n_umi" in adata.obs and len(adata.obs["n_umi"]) == adata.n_obs:
+        n = adata.obs["n_umi"].to_numpy(dtype=np.float64)
+    else:
+        n = np.asarray(
+            _as_csr(adata.layers[layer] if layer is not None else adata.X).sum(axis=1)
+        ).ravel()
     selected_rho = np.divide(selected, n, out=np.zeros_like(selected), where=n > 0)
     is_cell = _resolve_cell_mask(adata, droplet_key, cell_label)
     samples = _sample_names(adata, sample_key)

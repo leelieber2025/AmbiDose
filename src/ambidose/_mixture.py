@@ -12,9 +12,12 @@ from ._dose import (
     _rho_from_chi,
     _validate_chi_provenance,
 )
+from ._level import _type_readings
 from ._shared import (
     CHI_KEY,
     EMPTY_TYPES,
+    LEIDEN_RESOLUTION_FINE,
+    MIN_TYPE_CELLS,
     MIN_VALID,
     _as_csr,
     _chi_for_obs,
@@ -25,6 +28,61 @@ from ._shared import (
     _validated_type_values,
     indices_excluding_high_doublet,
 )
+
+
+def _split_labels(x_type) -> np.ndarray | None:
+    """Leiden sub-groups of one type at the product's fine resolution.
+
+    Groups under ``MIN_TYPE_CELLS`` cells merge into the largest group.
+    Returns ``None`` when the type does not separate into two groups.
+    """
+    import scanpy as sc
+    from anndata import AnnData as _AnnData
+
+    from ._typing import _embed_coarse_hvg
+
+    try:
+        sub = _AnnData(X=x_type.astype(np.float64).tocsr())
+        prepared = _embed_coarse_hvg(sub, typing_fast=False)
+        sc.tl.leiden(
+            prepared,
+            resolution=LEIDEN_RESOLUTION_FINE,
+            flavor="igraph",
+            n_iterations=2,
+            random_state=0,
+        )
+    except ValueError:
+        return None
+    lab = prepared.obs["leiden"].astype(str).to_numpy().copy()
+    counts = pd.Series(lab).value_counts()
+    for k in counts.index[counts < MIN_TYPE_CELLS]:
+        lab[lab == k] = counts.index[0]
+    return lab if pd.Series(lab).nunique() > 1 else None
+
+
+def _subgroup_rho(x, n, idx, ambient, *, max_iter, convergence, initial_rho, pseudocount):
+    """Rho of one type with one native profile per Leiden sub-group (ambient locked).
+
+    Returns ``None`` when the type has no sub-groups.
+    """
+    groups = _split_labels(x[idx])
+    if groups is None:
+        return None
+    fine_rho = np.zeros(idx.size, dtype=np.float64)
+    for g in pd.unique(groups):
+        sel = np.flatnonzero(groups == g)
+        fine_rho[sel] = _two_component_mixture_em(
+            coo=x[idx[sel]].tocoo(),
+            n_cells=n[idx[sel]],
+            n_vars=x.shape[1],
+            native=_simplex(np.asarray(x[idx[sel]].sum(axis=0)).ravel(), pseudocount),
+            ambient=ambient,
+            max_iter=max_iter,
+            convergence=convergence,
+            initial_rho=initial_rho,
+            pseudocount=pseudocount,
+        )[0]
+    return fine_rho
 
 
 def _type_sums_for_mean(x, in_sample, types, sample_types, doublet_scores, q):
@@ -222,11 +280,21 @@ def estimate_dose_mixture(
     fallback_min_chi: float = 1e-6,
     fallback_min_valid: int = MIN_VALID,
     doublet_exclude_q: float | None = None,
+    split_heterogeneous: bool = True,
 ) -> np.ndarray:
     """Estimate dose from native and contamination profiles.
 
     One mixture fit per type. Ambient is empty-droplet χ with that type's
     NNLS share removed: ``(χ - π_t profile_t) / (1 - π_t)``, π_t ≤ 0.95.
+    Sub-group refit. A type other than the sample's largest is also fitted
+    with one native profile per Leiden sub-group (product fine resolution;
+    ambient and NNLS share stay at the whole type). The sub-group rho replaces
+    the whole-type rho when its UMI-weighted level lies closer, on the log
+    scale, to the independent cross-type reading of that type's ambient level
+    (`_level._type_readings`; needs enough reference types, otherwise the
+    whole-type fit stays). The largest type is the one whose native profile
+    dominates the ambient estimate, so it is never split.
+    ``split_heterogeneous=False`` turns this off.
     Samples with fewer than two types use the untyped χ quantile floor
     (``fallback_*``, same defaults as ``estimate_dose()``).
     """
@@ -265,6 +333,7 @@ def estimate_dose_mixture(
     iterations = np.zeros(adata.n_obs, dtype=np.int64)
     converged = pd.array([pd.NA] * adata.n_obs, dtype="boolean")
     profile_tv = np.zeros(adata.n_obs, dtype=np.float64)
+    split_used = np.zeros(adata.n_obs, dtype=bool)
     empty_tv = np.full(adata.n_obs, np.nan, dtype=np.float64)
     profile = np.full(adata.n_obs, "not_evaluated", dtype=object)
     status = np.full(adata.n_obs, "not_evaluated", dtype=object)
@@ -325,6 +394,7 @@ def estimate_dose_mixture(
             if total_coef > 0:
                 coef = coef / total_coef
             pi = {t: float(coef[j]) for j, t in enumerate(sample_types)}
+        ambient_of: dict[object, np.ndarray] = {}
         for cell_type in sample_types:
             idx = np.flatnonzero(in_sample & (types == cell_type))
             idx = idx[n[idx] > 0]
@@ -353,6 +423,7 @@ def estimate_dose_mixture(
                 pseudocount=pseudocount,
             )
             selected_rho, selected_native, n_iter, did_converge, _inferred = fit
+            ambient_of[cell_type] = ambient_t
             rho_cell[idx] = selected_rho
             rho_empty[idx] = selected_rho
             rho[idx] = selected_rho
@@ -364,6 +435,35 @@ def estimate_dose_mixture(
             profile_tv[idx] = _tv_distance(selected_native, ambient_t)
             profile[idx] = selected_profile
             n_genes_ev[idx] = nnz_per_cell[idx]
+        if split_heterogeneous and chi is not None:
+            largest = max(ambient_of, key=lambda t: int(np.count_nonzero(in_sample & (types == t))))
+            _, readings = _type_readings(x, n, np.asarray(chi, dtype=np.float64), in_sample, types)
+            for cell_type, (per_reference, _stats) in readings.items():
+                if cell_type == largest or cell_type not in ambient_of:
+                    continue
+                idx = np.flatnonzero(in_sample & (types == cell_type))
+                idx = idx[n[idx] > 0]
+                fine_rho = _subgroup_rho(
+                    x,
+                    n,
+                    idx,
+                    ambient_of[cell_type],
+                    max_iter=max_iter,
+                    convergence=convergence,
+                    initial_rho=initial_rho,
+                    pseudocount=pseudocount,
+                )
+                reading = float(min(per_reference))
+                umi = max(float(n[idx].sum()), 1e-12)
+                coarse_level = float((rho[idx] * n[idx]).sum() / umi)
+                fine_level = float((fine_rho * n[idx]).sum() / umi) if fine_rho is not None else 0.0
+                if fine_rho is None or reading <= 0 or coarse_level <= 0 or fine_level <= 0:
+                    continue
+                if abs(np.log(fine_level / reading)) < abs(np.log(coarse_level / reading)):
+                    rho[idx] = fine_rho
+                    rho_cell[idx] = fine_rho
+                    rho_empty[idx] = fine_rho
+                    split_used[idx] = True
     dose = rho * n
     adata.obs["ambidose_dose_mixture"] = dose
     adata.obs["ambidose_rho_mixture"] = rho
@@ -377,6 +477,7 @@ def estimate_dose_mixture(
     adata.obs["ambidose_mixture_iterations"] = iterations
     adata.obs["ambidose_mixture_converged"] = converged
     adata.obs["ambidose_mixture_profile_tv"] = profile_tv
+    adata.obs["ambidose_mixture_split"] = split_used
     adata.obs["ambidose_mixture_empty_tv"] = empty_tv
     uns = dict(adata.uns.get("ambidose", {}))
     uns["mixture_provenance"] = _dose_provenance(

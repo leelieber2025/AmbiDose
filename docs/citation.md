@@ -16,5 +16,5 @@ Preprint: [https://www.biorxiv.org/content/10.64898/2026.09.27.754849v1](https:/
 ```
 
 Software record: [10.5281/zenodo.22278199](https://doi.org/10.5281/zenodo.22278199).
-Pin the package version used in the analysis, for example `ambidose==0.5.12`.
+Pin the package version used in the analysis, for example `ambidose==0.5.13`.
 See `CITATION.cff` in the repository.

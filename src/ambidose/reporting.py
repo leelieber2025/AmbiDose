@@ -93,6 +93,7 @@ def summarize(adata: AnnData, *, layer: str | None = None) -> dict:
         out["n_trust_low_evidence"] = int((cell_trust == "low_evidence").sum())
         out["n_trust_ceiling_risk"] = int((cell_trust == "ceiling_risk").sum())
         out["n_trust_type_structure_risk"] = int((cell_trust == "type_structure_risk").sum())
+        out["n_trust_level_risk"] = int((cell_trust == "level_risk").sum())
         out["n_trust_under_execution"] = int((cell_trust == "under_execution").sum())
         out["n_trust_over_removal"] = int((cell_trust == "over_removal").sum())
         out["rho_trust_prompt"] = (
@@ -383,6 +384,7 @@ def write_report(adata: AnnData, path: str | Path) -> Path:
             f"(too few informative genes: {data.get('n_trust_low_evidence', 0)}; "
             f"near upper limit: {data.get('n_trust_ceiling_risk', 0)}; "
             f"unresolved cell group: {data.get('n_trust_type_structure_risk', 0)}; "
+            f"type-level estimate above cross-type evidence: {data.get('n_trust_level_risk', 0)}; "
             f"under-executed dose: {data.get('n_trust_under_execution', 0)}; "
             f"over-removal: {data.get('n_trust_over_removal', 0)}).</p>"
         )

@@ -21,8 +21,8 @@ identifiers:
     value: 10.64898/2026.09.27.754849
     description: bioRxiv preprint.
 license: Apache-2.0
-version: 0.5.12
-date-released: "2026-10-02"
+version: 0.5.13
+date-released: "2026-10-13"
 preferred-citation:
   type: article
   title: "AmbiDose: per-cell removal budgets for ambient RNA contamination"

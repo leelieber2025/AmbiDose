@@ -333,7 +333,8 @@ def test_dose_disagreement_uses_fixed_only_on_agreement():
         adata, fixed_dose=np.array([10.0, 10.0, 30.0]), mixture_dose=np.array([9.0, 8.0, 5.0])
     )
     selected = adata.obs["ambidose_dose_selected"].to_numpy()
-    np.testing.assert_allclose(selected, [10.0, 10.0, 5.0])
+    # fixed rho 0.30, mixture rho 0.05 -> 0.05 / (1 - 0.30 + 0.05) of n=100
+    np.testing.assert_allclose(selected, [10.0, 10.0, 100 * 0.05 / 0.75])
     assert adata.obs["ambidose_dose_diagnosis"].tolist() == [
         "agreement",
         "agreement",
@@ -342,6 +343,44 @@ def test_dose_disagreement_uses_fixed_only_on_agreement():
     assert summary["n_disagreement"] == 1
     assert summary["n_fixed_high"] == 1
     assert summary["n_mixture_high"] == 0
+
+
+def test_dose_disagreement_blend_lies_between_estimates():
+    from anndata import AnnData
+    from scipy import sparse
+
+    from ambidose.pp import diagnose_dose_disagreement
+
+    n = 1000.0
+    adata = AnnData(sparse.csr_matrix(np.tile([[1000.0, 0.0]], (4, 1))))
+    fixed = np.array([800.0, 600.0, 300.0, 200.0])
+    mixture = np.array([100.0, 150.0, 50.0, 190.0])
+    diagnose_dose_disagreement(adata, fixed_dose=fixed, mixture_dose=mixture)
+    sel = adata.obs["ambidose_dose_selected"].to_numpy()
+    diag = adata.obs["ambidose_dose_diagnosis"].tolist()
+    for i in range(3):
+        assert diag[i] == "fixed_high"
+        assert mixture[i] < sel[i] < fixed[i]
+        rf, rm = fixed[i] / n, mixture[i] / n
+        assert np.isclose(sel[i], n * rm / (1 - rf + rm))
+    # Within sampling noise the two estimates agree and fixed is kept.
+    assert diag[3] == "agreement"
+    assert sel[3] == fixed[3]
+
+
+def test_dose_disagreement_mixture_high_keeps_mixture():
+    from anndata import AnnData
+    from scipy import sparse
+
+    from ambidose.pp import diagnose_dose_disagreement
+
+    adata = AnnData(sparse.csr_matrix([[1000.0, 0.0]]))
+    summary = diagnose_dose_disagreement(
+        adata, fixed_dose=np.array([100.0]), mixture_dose=np.array([400.0])
+    )
+    assert adata.obs["ambidose_dose_diagnosis"].tolist() == ["mixture_high"]
+    assert adata.obs["ambidose_dose_selected"].to_numpy()[0] == 400.0
+    assert summary["n_blended"] == 0
 
 
 def test_dose_disagreement_uses_layer_not_x_for_library_size():
@@ -365,7 +404,8 @@ def test_dose_disagreement_uses_layer_not_x_for_library_size():
         layer="counts",
     )
     selected = adata.obs["ambidose_dose_selected"].to_numpy()
-    np.testing.assert_allclose(selected, [10.0, 10.0, 5.0])
+    # fixed rho 0.30, mixture rho 0.05 -> 0.05 / (1 - 0.30 + 0.05) of n=100
+    np.testing.assert_allclose(selected, [10.0, 10.0, 100 * 0.05 / 0.75])
     assert adata.obs["ambidose_dose_diagnosis"].tolist() == [
         "agreement",
         "agreement",

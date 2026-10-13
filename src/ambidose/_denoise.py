@@ -16,6 +16,7 @@ from ._droplets import (
     call_cells,
     classify_droplets,
 )
+from ._level import cross_type_level_check
 from ._shared import (
     CHI_KEY,
     DOSE_KEY,
@@ -31,6 +32,7 @@ from ._shared import (
     RHO_TRUST_KEY,
     SAMPLE_KEY_DEFAULT,
     TRUST_CEILING,
+    TRUST_LEVEL,
     TRUST_LOW_EVIDENCE,
     TRUST_NOT_CELL,
     TRUST_OK,
@@ -59,9 +61,21 @@ from ._typing import _default_type_key, resolve_type_key
 
 
 def _write_rho_trust(
-    adata: AnnData, *, droplet_key: str, cell_label: str, layer_out: str = LAYER_OUT
+    adata: AnnData,
+    *,
+    droplet_key: str,
+    cell_label: str,
+    layer_out: str = LAYER_OUT,
+    type_key: str | None = None,
+    sample_key: str | None = None,
+    layer: str | None = None,
 ) -> dict:
-    """Flag cells where rho needs cautious quantitative interpretation."""
+    """Flag cells where rho needs cautious quantitative interpretation.
+
+    With ``type_key`` the type-level ambient estimate is also compared with
+    an independent cross-type reading (``level_risk``); this never changes
+    the dose.
+    """
     n = adata.n_obs
     labels = np.full(n, TRUST_NOT_CELL, dtype=object)
     is_cell = np.ones(n, dtype=bool)
@@ -118,6 +132,17 @@ def _write_rho_trust(
             if int(mask.sum()) < MIN_TYPE_CELLS:
                 tiny_type[mask] = True
     structure = one_type | tiny_type
+    level_risk = np.zeros(n, dtype=bool)
+    level_table: list[dict] = []
+    if type_key is not None:
+        level_risk, level_table = cross_type_level_check(
+            adata,
+            type_key=type_key,
+            droplet_key=droplet_key,
+            cell_label=cell_label,
+            layer=layer,
+            sample_key=sample_key,
+        )
     low = fallback | (n_genes < MIN_GENES)
     ceiling = rho >= 0.95
     under_execution = np.zeros(n, dtype=bool)
@@ -153,7 +178,9 @@ def _write_rho_trust(
     adata.obs["ambidose_trust_ceiling"] = is_cell & ceiling
     adata.obs["ambidose_trust_low_evidence"] = is_cell & low
     adata.obs["ambidose_trust_type_structure"] = is_cell & structure
+    adata.obs["ambidose_trust_level_risk"] = is_cell & level_risk
     labels[is_cell] = TRUST_OK
+    labels[is_cell & level_risk] = TRUST_LEVEL
     labels[is_cell & structure] = TRUST_TYPE
     labels[is_cell & low] = TRUST_LOW_EVIDENCE
     labels[is_cell & ceiling] = TRUST_CEILING
@@ -166,6 +193,7 @@ def _write_rho_trust(
             TRUST_LOW_EVIDENCE,
             TRUST_CEILING,
             TRUST_TYPE,
+            TRUST_LEVEL,
             TRUST_UNDER_EXECUTION,
             TRUST_OVER_REMOVAL,
             TRUST_NOT_CELL,
@@ -177,6 +205,7 @@ def _write_rho_trust(
         TRUST_LOW_EVIDENCE: int((cell_labels == TRUST_LOW_EVIDENCE).sum()),
         TRUST_CEILING: int((cell_labels == TRUST_CEILING).sum()),
         TRUST_TYPE: int((cell_labels == TRUST_TYPE).sum()),
+        TRUST_LEVEL: int((cell_labels == TRUST_LEVEL).sum()),
         TRUST_UNDER_EXECUTION: int((cell_labels == TRUST_UNDER_EXECUTION).sum()),
         TRUST_OVER_REMOVAL: int((cell_labels == TRUST_OVER_REMOVAL).sum()),
     }
@@ -189,6 +218,7 @@ def _write_rho_trust(
         "predicted_removed_umi": pred_total,
         "actual_removed_umi": removed_total,
         "sample_dose_unspent": sample_unspent,
+        "level_check": level_table,
         "note": (
             "QC flags apply to quantitative interpretation of ambidose_rho, "
             "not to cell filtering. d_c caps rank-1 removal and soupOnly "
@@ -220,6 +250,7 @@ _INTERNAL_DENOISE_OBS = (
     "ambidose_mixture_iterations",
     "ambidose_mixture_converged",
     "ambidose_mixture_profile_tv",
+    "ambidose_mixture_split",
     "ambidose_mixture_empty_tv",
     "ambidose_dose_log2_ratio",
     "ambidose_dose_rho_gap",
@@ -232,6 +263,7 @@ _INTERNAL_DENOISE_OBS = (
     "ambidose_trust_ceiling",
     "ambidose_trust_low_evidence",
     "ambidose_trust_type_structure",
+    "ambidose_trust_level_risk",
 )
 
 
@@ -284,6 +316,7 @@ def _print_denoise_summary(
         (TRUST_LOW_EVIDENCE, "too few informative genes"),
         (TRUST_CEILING, "estimate near the upper limit"),
         (TRUST_TYPE, "cell group too small or insufficiently resolved"),
+        (TRUST_LEVEL, "type-level ambient estimate well above cross-type evidence"),
         (TRUST_UNDER_EXECUTION, "less than half of estimated dose removed"),
         (TRUST_OVER_REMOVAL, "removal exceeded dose or half of cell UMIs"),
     )
@@ -857,7 +890,13 @@ def denoise(
     d = np.asarray(adata.obs[DOSE_KEY], dtype=np.float64)[is_cell_diag]
     rho = np.asarray(adata.obs[RHO_KEY], dtype=np.float64)[is_cell_diag]
     trust_counts = _write_rho_trust(
-        adata, droplet_key=droplet_key, cell_label="cell", layer_out=layer_out
+        adata,
+        droplet_key=droplet_key,
+        cell_label="cell",
+        layer_out=layer_out,
+        type_key=resolved,
+        sample_key=sk,
+        layer=layer,
     )
     removal = adata.uns.get("ambidose", {}).get("removal", {})
     execution_percentiles = removal.get("execution_ratio_percentiles", {})

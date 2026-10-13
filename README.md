@@ -48,7 +48,7 @@ the QC report before using it as a contamination rate.
 
 ## Status
 
-**0.5.12 (Alpha).** Import as `import ambidose as amdose`. The entry point is
+**0.5.13 (Alpha).** Import as `import ambidose as amdose`. The entry point is
 `denoise()`. See the
 [API reference](https://ambidose.readthedocs.io/en/latest/api/index.html).
 
@@ -80,7 +80,7 @@ If you use AmbiDose in published work, please cite the preprint:
 ```
 
 For the software record, cite the [Zenodo DOI](https://doi.org/10.5281/zenodo.22278199).
-Pin the package version used in the analysis, for example `ambidose==0.5.12`.
+Pin the package version used in the analysis, for example `ambidose==0.5.13`.
 See `CITATION.cff` and the [citation page](https://ambidose.readthedocs.io/en/latest/citation.html).
 
 ## License
