@@ -4,6 +4,7 @@
 [![PyPI downloads](https://img.shields.io/pepy/dt/ambidose.svg)](https://pepy.tech/project/ambidose)
 [![Bioconda](https://img.shields.io/conda/vn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
 [![Conda downloads](https://img.shields.io/conda/dn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
+[![Total downloads](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/leelieber2025/AmbiDose/badges/downloads.json)](https://pepy.tech/project/ambidose)
 [![Python versions](https://img.shields.io/pypi/pyversions/ambidose.svg)](https://pypi.org/project/ambidose/)
 [![Documentation](https://readthedocs.org/projects/ambidose/badge/?version=latest)](https://ambidose.readthedocs.io/en/latest/)
 [![CI](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml/badge.svg)](https://github.com/leelieber2025/AmbiDose/actions/workflows/tests.yml)
