@@ -1,9 +1,10 @@
 # AmbiDose Documentation
 
 [![PyPI version](https://img.shields.io/pypi/v/ambidose.svg)](https://pypi.org/project/ambidose/)
-[![PyPI downloads](https://img.shields.io/pepy/dt/ambidose.svg)](https://pepy.tech/project/ambidose)
+[![PyPI downloads](https://img.shields.io/pepy/dt/ambidose.svg?label=PyPI%20downloads)](https://pepy.tech/project/ambidose)
 [![Bioconda](https://img.shields.io/conda/vn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
-[![Conda downloads](https://img.shields.io/conda/dn/bioconda/ambidose.svg)](https://anaconda.org/bioconda/ambidose)
+[![Conda downloads](https://img.shields.io/conda/dn/bioconda/ambidose.svg?label=Bioconda%20downloads)](https://anaconda.org/bioconda/ambidose)
+[![Total downloads](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/leelieber2025/AmbiDose/badges/downloads.json)](https://pepy.tech/project/ambidose)
 [![Python versions](https://img.shields.io/pypi/pyversions/ambidose.svg)](https://pypi.org/project/ambidose/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/leelieber2025/AmbiDose/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22278199.svg)](https://doi.org/10.5281/zenodo.22278199)
