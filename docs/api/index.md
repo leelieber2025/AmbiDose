@@ -12,7 +12,7 @@ Only names exported by `ambidose.__all__` are the top-level public API. Evaluati
 
 ```{eval-rst}
 .. automodule:: ambidose
-   :members: denoise, analysis_ready, summarize, inspect_input, write_report, classify_droplets, mark_doublets, estimate_chi, resolve_type_key, estimate_dose, subtract
+      :members: denoise, analysis_ready, summarize, inspect_input, write_report, call_cells, classify_droplets, mark_doublets, estimate_chi, resolve_type_key, estimate_dose, subtract
    :member-order: bysource
 ```
 
