@@ -1,8 +1,11 @@
 name: Downloads badge
 
-# Counts are refreshed by writing badges/downloads.json directly.
-# This workflow is not scheduled: a run would show up as an Action each time.
+# Daily refresh of badges/downloads.json. This is the only workflow for that
+# update. Test CI does not listen to the badges branch, and an unchanged
+# total does not create a commit.
 on:
+  schedule:
+    - cron: '17 6 * * *'
   workflow_dispatch:
 
 permissions:
