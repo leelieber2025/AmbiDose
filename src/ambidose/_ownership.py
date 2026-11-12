@@ -149,6 +149,10 @@ CROSS_TYPE_ANCHOR_GAP = 3.0
 CROSS_TYPE_ANCHOR_K = 2.5
 CROSS_TYPE_ANCHOR_MIN_RHO = 0.1
 CROSS_TYPE_ANCHOR_MIN_ADJUSTED_R2 = 0.01
+STRUCTURE_NULL_QUANTILE = 0.99
+STRUCTURE_NULL_MIN_DRAWS = 200
+STRUCTURE_NULL_MAX_PERMS = 20
+STRUCTURE_NULL_GENES = 256
 STRUCTURE_CHUNK = 3000
 
 
@@ -162,6 +166,64 @@ def _structure_chunk_genes(n_cells: int, n_cand: int) -> int:
     )
 
 
+def _ols_r2(
+    target: np.ndarray, design: np.ndarray, q: np.ndarray | None, solver: str
+) -> np.ndarray:
+    """Unadjusted coefficient of determination for each column of ``target``."""
+    if solver == "qr":
+        fitted = q @ (q.T @ target)
+    else:
+        fitted = design @ np.linalg.lstsq(design, target, rcond=None)[0]
+    denom = np.square(target - target.mean(axis=0)).sum(axis=0)
+    out = np.full(target.shape[1], np.nan, dtype=np.float64)
+    valid = denom > 0
+    out[valid] = 1.0 - np.square(target[:, valid] - fitted[:, valid]).sum(axis=0) / denom[valid]
+    return out
+
+
+def _adjusted_r2_from_r2(r2: np.ndarray, n_cells: int, n_comp: int) -> np.ndarray:
+    return 1.0 - (1.0 - r2) * (n_cells - 1) / (n_cells - n_comp - 1)
+
+
+def _permutation_adjusted_r2_threshold(
+    z,
+    design: np.ndarray,
+    q: np.ndarray | None,
+    solver: str,
+    candidates: np.ndarray,
+    n_comp: int,
+    *,
+    quantile: float = STRUCTURE_NULL_QUANTILE,
+    rng: np.random.Generator | None = None,
+) -> float:
+    """Within-type null: shuffle candidate rows against programs fit on other genes.
+
+    One shared permutation per draw breaks alignment with the programs and
+    leaves gene-gene dependence out of the threshold. The level multiplier
+    ``CROSS_TYPE_ANCHOR_K`` is not set here.
+    """
+    rng = np.random.default_rng(0) if rng is None else rng
+    n_cells = z.shape[0]
+    gene_idx = np.asarray(candidates)
+    if gene_idx.size > STRUCTURE_NULL_GENES:
+        gene_idx = rng.choice(gene_idx, size=STRUCTURE_NULL_GENES, replace=False)
+    draws: list[np.ndarray] = []
+    n_draw = 0
+    for _ in range(STRUCTURE_NULL_MAX_PERMS):
+        perm = rng.permutation(n_cells)
+        target = z[perm][:, gene_idx].toarray()
+        adjusted = _adjusted_r2_from_r2(_ols_r2(target, design, q, solver), n_cells, n_comp)
+        finite = adjusted[np.isfinite(adjusted)]
+        if finite.size:
+            draws.append(finite)
+            n_draw += int(finite.size)
+        if n_draw >= STRUCTURE_NULL_MIN_DRAWS:
+            break
+    if n_draw == 0:
+        return CROSS_TYPE_ANCHOR_MIN_ADJUSTED_R2
+    return float(np.quantile(np.concatenate(draws), quantile))
+
+
 def _cross_cell_structure_mask(
     x,
     n: np.ndarray,
@@ -169,7 +231,8 @@ def _cross_cell_structure_mask(
     candidates: np.ndarray,
     reference_genes: np.ndarray,
     *,
-    min_adjusted_r2: float = CROSS_TYPE_ANCHOR_MIN_ADJUSTED_R2,
+    min_adjusted_r2: float | None = CROSS_TYPE_ANCHOR_MIN_ADJUSTED_R2,
+    calibrate_null: bool = False,
     n_components: int = 20,
     chunk_size: int | None = None,
     solver: str = "qr",
@@ -202,6 +265,12 @@ def _cross_cell_structure_mask(
         q, r = np.linalg.qr(design, mode="reduced")
         if np.linalg.matrix_rank(r) < r.shape[0]:
             solver = "lstsq"
+    if calibrate_null:
+        min_adjusted_r2 = _permutation_adjusted_r2_threshold(
+            z, design, q, solver, candidates, n_comp
+        )
+    elif min_adjusted_r2 is None:
+        min_adjusted_r2 = CROSS_TYPE_ANCHOR_MIN_ADJUSTED_R2
     n_cand = int(candidates.size)
     min_task_genes = 16
     max_useful_tasks = max(1, (n_cand + min_task_genes - 1) // min_task_genes)
@@ -239,14 +308,9 @@ def _cross_cell_structure_mask(
             where="parallel cross-type structure protection",
         )
         target = z[:, sl].toarray()
-        if solver == "qr":
-            fitted = q @ (q.T @ target)
-        else:
-            fitted = design @ np.linalg.lstsq(design, target, rcond=None)[0]
-        denom = np.square(target - target.mean(axis=0)).sum(axis=0)
-        valid = denom > 0
-        out = np.zeros(sl.size, dtype=np.float64)
-        out[valid] = 1.0 - np.square(target[:, valid] - fitted[:, valid]).sum(axis=0) / denom[valid]
+        out = _ols_r2(target, design, q, solver)
+        valid = np.isfinite(out)
+        out = np.where(valid, out, 0.0)
         if solver == "qr" and valid.any():
             factor = (idx.size - 1) / (idx.size - n_comp - 1)
             adjusted = 1.0 - (1.0 - out) * factor
@@ -254,9 +318,8 @@ def _cross_cell_structure_mask(
             if verify.any():
                 exact_target = target[:, verify]
                 exact_fitted = design @ np.linalg.lstsq(design, exact_target, rcond=None)[0]
-                out[verify] = (
-                    1.0 - np.square(exact_target - exact_fitted).sum(axis=0) / denom[verify]
-                )
+                denom = np.square(exact_target - exact_target.mean(axis=0)).sum(axis=0)
+                out[verify] = 1.0 - np.square(exact_target - exact_fitted).sum(axis=0) / denom
         return start, out
 
     try:
@@ -280,7 +343,7 @@ def _cross_cell_structure_mask(
             "Ranger filtered barcodes so empty droplets are not treated as "
             "cells, or run with more memory"
         ) from exc
-    adjusted_r2 = 1.0 - (1.0 - r2) * (idx.size - 1) / (idx.size - n_comp - 1)
+    adjusted_r2 = _adjusted_r2_from_r2(r2, idx.size, n_comp)
     passed[candidates[adjusted_r2 >= min_adjusted_r2]] = True
     return passed
 
@@ -399,6 +462,7 @@ def _cross_type_anchor_mask(
                     idx,
                     cand,
                     has_owner_anywhere,
+                    calibrate_null=True,
                     n_jobs=n_jobs,
                 )
                 r_t = mean_t[cand] / (n_bar_t * chi[cand])

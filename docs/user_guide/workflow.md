@@ -2,7 +2,7 @@
 
 ## Use `denoise()`
 
-The product path is `denoise()`, then `write_report()` (or CLI `--report`). `classify_droplets`, `estimate_chi`, `estimate_dose`, and `subtract` are steps inside that path.
+The product path is `denoise()`, then `write_report()` (or CLI `--report`). `classify_droplets`, `estimate_chi`, `estimate_dose_adaptive`, and `subtract` are steps inside that path. `estimate_dose` is the fixed estimator inside that adaptive selection.
 
 The completed product output keeps a small public schema: `obs` contains `ambidose_droplet`, the final `ambidose_d` and `ambidose_rho`, `ambidose_removed_umi`, and `ambidose_rho_trust`; automatic typing also adds `ambidose_cluster`. Estimator-specific working columns are removed before `denoise()` returns. `var` stores the ambient profile and per-gene removal, while `uns["ambidose"]` stores run-level summaries.
 
@@ -69,18 +69,22 @@ The default estimator uses a broad `type_key`. `denoise()` resolves one in this 
 
 Do not pass a high-resolution atlas or a per-cell reassignment of cluster labels from ambient-contaminated marker scores. Fine fragments skip extra-clear below 10 cells and weaken exclusive gene ownership. Annotate cell types on the denoised counts after `denoise()`, or supply broad labels computed outside this package.
 
+Missing values and blank strings in `type_key` are empty labels. The strings `"nan"`, `"None"`, `"<NA>"`, and `"NA"` are ordinary labels. `astype(str)` on the column before `denoise()` turns real missing values into those strings, and they then enter ownership and dose as a type.
+
 Dose is estimated per Leiden fragment. Dominant-gene ownership is computed **per sample** from that sample's groups: fragments whose whole profiles are indistinguishable from split noise form a meta-group and share identity-gene ownership. A gene's ownership can further be shared across several distinct meta-groups of the same broad identity when each meta-group's conservative mean (its point estimate minus sampling error) still exceeds every other meta-group's mean (e.g. erythroid maturation stages at very different hemoglobin levels) — not only the single largest one. Concatenating libraries does not share an owner catalog across samples. Each sample still uses its own $\chi_s$.
 
 ## Dose estimation
 
 ```python
 type_key = amdose.resolve_type_key(adata, type_key="cell_type")
-dose = amdose.estimate_dose(adata, type_key=type_key, sample_key="sample")
+dose = amdose.estimate_dose_adaptive(adata, type_key=type_key, sample_key="sample")
 ```
 
-The function writes `ambidose_rho`, `ambidose_d`, raw estimates, evidence counts, fallback flags, and shrinkage diagnostics. Empty and other droplets retain zero estimated dose. Their rows in `ambidose_denoised` are the original counts (passed through, not corrected). Doublet predictions are diagnostic and do not remove a cell from dose estimation.
+`denoise()` calls `estimate_dose_adaptive()`. Agreement keeps the fixed estimate (`estimate_dose`). When the fixed estimate is higher beyond Poisson error, executed ρ is the blend `ρ_mix / (1 - ρ_fixed + ρ_mix)`. When the mixture estimate is higher, the mixture estimate is kept. `obs["ambidose_dose_rule"]` is `fixed`, `blend`, or `mixture` on a stepwise run. `denoise()` uses that column for trust, then drops it with the other estimator working columns. Rho-trust reads mixture gene counts only for `mixture` cells.
 
-Calling `estimate_dose()` without `type_key` intentionally selects the label-free quantile-floor ablation. It is not the default type-aware estimator.
+The adaptive call writes `ambidose_rho`, `ambidose_d`, raw estimates, evidence counts, fallback flags, and shrinkage diagnostics. Empty and other droplets retain zero estimated dose. Their rows in `ambidose_denoised` are the original counts (passed through, not corrected). Doublet predictions are diagnostic and do not remove a cell from dose estimation.
+
+Calling `estimate_dose()` on its own runs only the fixed estimator. Calling it without `type_key` intentionally selects the label-free quantile-floor ablation. It is not the default type-aware estimator.
 
 ## Subtraction
 

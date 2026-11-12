@@ -9,8 +9,9 @@ Recommended usage::
     adata = amdose.denoise(adata, raw="raw_feature_bc_matrix.h5", sample_key=None)
 
 ``denoise()`` is the product entry. ``classify_droplets``, ``estimate_chi``,
-``estimate_dose``, and ``subtract`` are steps inside that path, not alternate
-workflows.
+``estimate_dose_adaptive``, and ``subtract`` are steps inside that path, not
+alternate workflows. ``estimate_dose`` is the fixed estimator used inside
+adaptive selection.
 
 ``ambidose.metrics`` (ground-truth benchmarking: barnyard leakage, marker
 leakage, entropy) is a separate evaluation module, not part of this product
@@ -21,7 +22,7 @@ from __future__ import annotations
 
 from . import datasets, pl
 from ._version import __version__
-from .io import read_10x_barcodes, read_10x_h5, read_10x_mtx, write_h5ad
+from .io import read_10x_barcodes, read_10x_h5, read_10x_mtx, write_10x_mtx, write_h5ad
 from .pp import (
     analysis_ready,
     call_cells,
@@ -29,6 +30,7 @@ from .pp import (
     denoise,
     estimate_chi,
     estimate_dose,
+    estimate_dose_adaptive,
     mark_doublets,
     resolve_type_key,
     subtract,
@@ -44,6 +46,7 @@ __all__ = [
     "denoise",
     "estimate_chi",
     "estimate_dose",
+    "estimate_dose_adaptive",
     "inspect_input",
     "mark_doublets",
     "pl",
@@ -54,5 +57,6 @@ __all__ = [
     "subtract",
     "summarize",
     "write_report",
+    "write_10x_mtx",
     "write_h5ad",
 ]

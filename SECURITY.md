@@ -19,8 +19,6 @@ Instead, use GitHub's private vulnerability reporting:
 [Report a vulnerability](https://github.com/leelieber2025/AmbiDose/security/advisories/new)
 (repository → **Security** tab → **Report a vulnerability**).
 
-Until the repository is public, email `leelieber@gmail.com`.
-
 Include a description of the issue, steps to reproduce, and the affected
 version.
 

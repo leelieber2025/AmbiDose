@@ -340,6 +340,7 @@ def test_dose_disagreement_uses_fixed_only_on_agreement():
         "agreement",
         "fixed_high",
     ]
+    assert adata.obs["ambidose_dose_rule"].tolist() == ["fixed", "fixed", "blend"]
     assert summary["n_disagreement"] == 1
     assert summary["n_fixed_high"] == 1
     assert summary["n_mixture_high"] == 0
@@ -379,6 +380,7 @@ def test_dose_disagreement_mixture_high_keeps_mixture():
         adata, fixed_dose=np.array([100.0]), mixture_dose=np.array([400.0])
     )
     assert adata.obs["ambidose_dose_diagnosis"].tolist() == ["mixture_high"]
+    assert adata.obs["ambidose_dose_rule"].tolist() == ["mixture"]
     assert adata.obs["ambidose_dose_selected"].to_numpy()[0] == 400.0
     assert summary["n_blended"] == 0
 
@@ -660,6 +662,24 @@ def test_write_rho_trust_uses_mixture_n_genes_when_no_fixed_pass():
     # Real mixture evidence (per-cell detected-gene counts) is well above
     # MIN_GENES here, so low_evidence must not be universally true anymore.
     assert not adata.obs.loc[is_cell, "ambidose_trust_low_evidence"].all()
+
+
+def test_write_rho_trust_uses_mixture_genes_only_for_mixture_rule():
+    from anndata import AnnData
+    from scipy import sparse
+
+    from ambidose.pp import RHO_KEY, _write_rho_trust
+
+    adata = AnnData(sparse.csr_matrix(np.ones((2, 20))))
+    adata.obs["ambidose_droplet"] = "cell"
+    adata.obs[RHO_KEY] = 0.1
+    adata.obs["ambidose_n_dose_genes"] = [20, 20]
+    adata.obs["ambidose_mixture_n_genes"] = [0, 0]
+    adata.obs["ambidose_dose_rule"] = ["blend", "mixture"]
+    adata.obs["ambidose_dose_disagreement"] = [True, True]
+    _write_rho_trust(adata, droplet_key="ambidose_droplet", cell_label="cell")
+    low = adata.obs["ambidose_trust_low_evidence"].to_numpy()
+    assert low.tolist() == [False, True]
 
 
 def test_mixture_one_type_without_chi_raises():

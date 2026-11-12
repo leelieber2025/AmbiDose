@@ -157,9 +157,6 @@ from ._shared import (
     SHRINK_K as SHRINK_K,
 )
 from ._shared import (
-    TYPE_KEY as TYPE_KEY,
-)
-from ._shared import (
     _as_csr as _as_csr,
 )
 from ._shared import (

@@ -43,6 +43,19 @@ def test_housekeeping_shared_genes_bias_rho():
     assert abs(rho_hat - 0.1) < 0.05
 
 
+def test_split_type_labels_skips_blank_and_splits_literal_nan():
+    ad = make_toy(n_samples=1, n_empty=10, n_cells=20, seed=2)
+    cells = np.flatnonzero(ad.obs["droplet"].astype(str).to_numpy() == "cell")
+    blank = ad.obs_names[cells[0]]
+    literal = ad.obs_names[cells[1]]
+    ad.obs["cell_type"] = ad.obs["cell_type"].astype(object)
+    ad.obs.loc[blank, "cell_type"] = "   "
+    ad.obs.loc[literal, "cell_type"] = "nan"
+    split_type_labels(ad, n_splits=2, seed=0)
+    assert ad.obs.loc[blank, "label_split"] == "   "
+    assert str(ad.obs.loc[literal, "label_split"]).startswith("nan_s")
+
+
 def test_split_type_labels_does_not_change_counts():
     ad = make_toy(n_samples=1, n_empty=40, n_cells=40, seed=2)
     x0 = ad.X.copy()

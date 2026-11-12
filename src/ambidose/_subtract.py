@@ -72,6 +72,35 @@ from ._shared import (
 from ._typing import _default_type_key
 
 
+def _stored_empty_stats(adata: AnnData, sample) -> tuple[float, float]:
+    """Mean empty UMI and empty-cloud knee for this sample only.
+
+    Both are zero when this sample has no stored ``empty_umi`` record.
+    Callers treat a non-positive value as "gate off". Another sample's
+    record is never substituted.
+    """
+    recs = adata.uns.get("ambidose", {}).get("empty_umi", {})
+    if not isinstance(recs, dict):
+        recs = {}
+    sample_id = _sample_storage_id(None if sample is None else str(sample))
+    rec = recs.get(sample_id) or {}
+    if not isinstance(rec, dict):
+        rec = {}
+    lam = rec.get("lam_e")
+    if lam is None:
+        label = "this library" if sample is None else str(sample)
+        get_logger().warning(
+            "ambidose: %s has no empty droplets and no stored empty_umi; "
+            "empty-consistent rank-1 cap and the knee gate are off",
+            label,
+        )
+        return 0.0, 0.0
+    lam_e = float(lam)
+    knee = rec.get("knee_umi")
+    knee_e = float(knee) if knee is not None else lam_e
+    return lam_e, knee_e
+
+
 def subtract(
     adata: AnnData,
     *,
@@ -249,13 +278,7 @@ def subtract(
                 lam_e = float(n[empty_idx_s].mean())
                 knee_e = _empty_cloud_knee_umi(n, empty_idx_s)
             else:
-                recs = adata.uns.get("ambidose", {}).get("empty_umi", {})
-                rec = recs.get(_sample_storage_id(None if s is None else str(s)), {})
-                if not rec and recs:
-                    rec = next(iter(recs.values()))
-                lam_e = float(rec["lam_e"]) if rec.get("lam_e") is not None else 0.0
-                stored_knee = rec.get("knee_umi") if rec else None
-                knee_e = float(stored_knee) if stored_knee is not None else lam_e
+                lam_e, knee_e = _stored_empty_stats(adata, s)
             types_s_all = np.where(in_s, types, EMPTY_TYPE)
             type_names_s = list(pd.unique(types[in_s]))
             type_indices_s = {t: np.flatnonzero(in_s & (types == t)) for t in type_names_s}

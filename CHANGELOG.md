@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-11-11
+
+### Fixed
+
+- `subtract()` uses only this sample's stored `empty_umi`. A missing record
+  turns the empty-consistent rank-1 cap and the knee gate off. Another
+  sample's `lam_e` / `knee_umi` is not reused.
+- Rho-trust reads mixture gene counts only when `obs['ambidose_dose_rule']`
+  is `mixture`. Blended cells keep the fixed estimator's evidence.
+
+### Changed
+
+- Cross-type structure protection compares adjusted \(R^2\) with the 99th
+  percentile of a within-type permutation null. The anchor ratio stays 2.5.
+  Dose estimation does not read this cutoff.
+- `estimate_dose_adaptive` and `write_10x_mtx` are exported from the package
+  root. Stepwise dose estimation should call `estimate_dose_adaptive`;
+  `estimate_dose` remains the fixed estimator.
+- `scfair` is optional (`ambidose[typing]`). Without it, label-free typing
+  uses Leiden resolution 0.35.
+- The unused `ambidose_type` constant is no longer exported. Automatic
+  typing still writes `obs['ambidose_cluster']`.
+- Checked-in `PKG-INFO` is no longer part of the source tree. Version stays
+  in `src/ambidose/_version.py`.
+
 ## [0.5.13] - 2026-10-13
 
 ### Added

@@ -21,7 +21,6 @@ DOSE_KEY = "ambidose_d"
 RHO_KEY = "ambidose_rho"
 LAYER_OUT = "ambidose_denoised"
 SAMPLE_KEY_DEFAULT = None
-TYPE_KEY = "ambidose_type"
 CLUSTER_KEY = "ambidose_cluster"
 RHO_TRUST_KEY = "ambidose_rho_trust"
 TRUST_OK = "ok"
@@ -234,7 +233,13 @@ def _need(problem: str, action: str) -> str:
 def _validated_group_values(
     adata: AnnData, key: str, *, kind: str, allow_missing: bool
 ) -> pd.Series:
-    """Return stable string labels without merging distinct source identities."""
+    """Return stable string labels without merging distinct source identities.
+
+    Real missing values and blank strings become ``EMPTY_TYPE`` when
+    ``allow_missing`` is true. The strings ``"nan"``, ``"None"``, ``"<NA>"``,
+    and ``"NA"`` stay as labels. ``astype(str)`` on the column before a call
+    turns missing values into those strings, so they are no longer empty.
+    """
     values = adata.obs[key]
     missing = values.isna()
     stripped_empty = values.astype("string").str.strip().eq("").fillna(False)

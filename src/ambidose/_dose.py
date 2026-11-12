@@ -642,6 +642,7 @@ def estimate_dose(
         "ambidose_dose_rho_gap",
         "ambidose_dose_disagreement",
         "ambidose_dose_diagnosis",
+        "ambidose_dose_rule",
         "ambidose_dose_selected",
         "ambidose_d_raw",
         "ambidose_rho_raw",
@@ -913,6 +914,7 @@ def diagnose_dose_disagreement(
     selected ρ is ``ρ_mix / (1 - ρ_fixed + ρ_mix)``, which lies between the
     two; with the mixture estimate above, the mixture estimate is kept.
     Explicit ``fold_threshold`` / ``rho_gap_threshold`` remain for tests.
+    ``obs['ambidose_dose_rule']`` records ``fixed``, ``blend``, or ``mixture``.
     """
     _reject_view(adata, "diagnose_dose_disagreement")
     if fold_threshold is not None and fold_threshold <= 1:
@@ -1009,6 +1011,12 @@ def diagnose_dose_disagreement(
     use_blend = large & (fixed_rho > mixture_rho)
     selected = np.where(large, mixture, fixed)
     selected = np.where(use_blend, blend, selected)
+    # Trust and gene-evidence follow this rule. Disagreement is broader:
+    # fixed_high cells are blended, and only mixture_high keeps the mixture dose.
+    rule = np.full(adata.n_obs, "fixed", dtype=object)
+    rule[large] = "mixture"
+    rule[use_blend] = "blend"
+    adata.obs["ambidose_dose_rule"] = rule
     adata.obs["ambidose_dose_selected"] = selected
     n_eligible = int(eligible.sum())
     summary: dict[str, float | int] = {
@@ -1062,11 +1070,14 @@ def estimate_dose_adaptive(
     evidence_mode: str = "exposure",
     doublet_exclude_q: float | None = None,
 ) -> np.ndarray:
-    """Select fixed dose on agreement and mixture dose on large disagreement.
+    """Select fixed dose on agreement and a mixture-based dose on disagreement.
 
-    Executed ``ambidose_d`` / ``ambidose_rho`` are the selected values
-    (scale 1). ``q = median(ρ̂) n̄ / λ_e`` is still recorded per sample.
-    ``ambidose_dose_selected`` is the same as executed dose.
+    Agreement keeps the fixed estimate. ``fixed_high`` cells use the blend
+    ``ρ_mix / (1 - ρ_fixed + ρ_mix)``. ``mixture_high`` cells keep the
+    mixture estimate. ``obs['ambidose_dose_rule']`` is ``fixed``, ``blend``,
+    or ``mixture``. Executed ``ambidose_d`` / ``ambidose_rho`` are the
+    selected values (scale 1). ``q = median(ρ̂) n̄ / λ_e`` is still recorded
+    per sample. ``ambidose_dose_selected`` is the same as executed dose.
     """
     estimate_dose(
         adata,

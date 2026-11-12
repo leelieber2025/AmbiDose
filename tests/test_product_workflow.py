@@ -713,13 +713,13 @@ def test_typing_fast_is_noop_below_cell_threshold(monkeypatch):
 
 
 def test_auto_grouping_is_label_free_leiden():
-    from ambidose.pp import CLUSTER_KEY, TYPE_KEY, resolve_type_key
+    from ambidose.pp import CLUSTER_KEY, resolve_type_key
 
     adata = make_toy(n_samples=1, n_empty=40, n_cells=30, n_genes=50, seed=9)
     adata.obs["ambidose_droplet"] = adata.obs["droplet"].astype(str)
     assert resolve_type_key(adata) == CLUSTER_KEY
     assert CLUSTER_KEY in adata.obs
-    assert TYPE_KEY not in adata.obs
+    assert "ambidose_type" not in adata.obs
     from ambidose._shared import EMPTY_TYPE, _validated_type_values
 
     noncells = adata.obs["ambidose_droplet"].astype(str).to_numpy() != "cell"

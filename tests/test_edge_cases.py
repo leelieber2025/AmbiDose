@@ -294,6 +294,74 @@ def test_structure_mask_one_and_four_threads_are_identical():
     np.testing.assert_array_equal(serial, parallel)
 
 
+def test_structure_null_keeps_program_gene_and_drops_noise():
+    from scipy import sparse as sp
+
+    from ambidose._ownership import _cross_cell_structure_mask
+
+    rng = np.random.default_rng(1)
+    n_cells = 300
+    program = rng.integers(0, 2, size=n_cells)
+    ref = np.column_stack([rng.poisson(8 + 20 * program) for _ in range(12)])
+    native = rng.poisson(4 + 30 * program)
+    noise = rng.poisson(6, size=n_cells)
+    filler = 4000 - ref.sum(axis=1) - native - noise
+    x = sp.csr_matrix(np.column_stack([ref, native, noise, filler]).astype(np.float64))
+    totals = np.asarray(x.sum(axis=1)).ravel()
+    candidates = np.array([12, 13])
+    reference = np.zeros(x.shape[1], dtype=bool)
+    reference[:12] = True
+    fixed = _cross_cell_structure_mask(
+        x, totals, np.arange(n_cells), candidates, reference, n_components=2
+    )
+    null = _cross_cell_structure_mask(
+        x,
+        totals,
+        np.arange(n_cells),
+        candidates,
+        reference,
+        n_components=2,
+        calibrate_null=True,
+    )
+    assert fixed[12] and null[12]
+    assert not null[13]
+
+
+def test_structure_gate_does_not_change_dose():
+    from ambidose.datasets import make_toy
+    from ambidose.pp import denoise
+
+    raw = make_toy(
+        n_samples=1,
+        n_empty=40,
+        n_cells=80,
+        n_genes=40,
+        contamination=0.2,
+        seed=3,
+    )
+    cells = raw.obs_names[raw.obs["droplet"].astype(str) == "cell"].tolist()
+    base = raw.copy()
+    denoise(base, cell_barcodes=cells, type_key="cell_type", sample_key=None)
+
+    def no_structure(*args, **kwargs):
+        return np.zeros(args[0].shape[1], dtype=bool)
+
+    import ambidose._ownership as ownership
+
+    original = ownership._cross_cell_structure_mask
+    ownership._cross_cell_structure_mask = no_structure
+    try:
+        blocked = raw.copy()
+        denoise(blocked, cell_barcodes=cells, type_key="cell_type", sample_key=None)
+    finally:
+        ownership._cross_cell_structure_mask = original
+
+    np.testing.assert_array_equal(
+        base.obs["ambidose_rho"].to_numpy(),
+        blocked.obs["ambidose_rho"].to_numpy(),
+    )
+
+
 def test_thread_workers_are_bounded_by_cpu_memory_and_tasks(monkeypatch):
     from ambidose.pp import _thread_worker_count
 

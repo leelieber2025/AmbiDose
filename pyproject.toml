@@ -40,13 +40,16 @@ dependencies = [
     "h5py>=3.0",
     "scanpy>=1.10",
     "scikit-learn>=1.0",
+    # Scrublet's automatic threshold imports skimage. Scanpy does not depend on it.
     "scikit-image>=0.19",
     "threadpoolctl>=3.0",
     "igraph>=0.10",
-    "scfair>=0.7",
 ]
 
 [project.optional-dependencies]
+typing = [
+    "scfair>=0.7",
+]
 baselines = [
     "scvi-tools>=1.0",
 ]

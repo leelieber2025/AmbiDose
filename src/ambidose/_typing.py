@@ -67,9 +67,6 @@ from ._shared import (
     SHRINK_K as SHRINK_K,
 )
 from ._shared import (
-    TYPE_KEY as TYPE_KEY,
-)
-from ._shared import (
     _dense_chunk_columns as _dense_chunk_columns,
 )
 from ._shared import (

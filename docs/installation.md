@@ -3,7 +3,7 @@
 ## Requirements
 
 - Python 3.10–3.13
-- NumPy, SciPy, pandas, AnnData, h5py, scanpy 1.10+, igraph, and scFair
+- NumPy, SciPy, pandas, AnnData, h5py, scanpy 1.10+, igraph, and scikit-image
 - Raw integer UMI counts for the standard denoising workflow
 
 A GPU is not required.
@@ -16,9 +16,10 @@ pip install ambidose
 conda install -c conda-forge -c bioconda ambidose
 ```
 
-`pip` installs scFair with AmbiDose. Optional comparison baselines that use scVI-tools are separate:
+Without `type_key`, label-free typing uses Leiden resolution 0.35 when scFair is not installed. Install scFair to let its population estimate choose 0.08, 0.2, or 0.35. Comparison baselines that use scVI-tools are a separate extra:
 
 ```bash
+pip install "ambidose[typing]"
 pip install "ambidose[baselines]"
 ```
 

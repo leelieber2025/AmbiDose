@@ -15,6 +15,6 @@
 | `cell_calling` | `denoise` | Method and how many barcodes were called, when AmbiDose called cells itself. |
 | `postprocess_completed` | `denoise` | Summary and trust columns were written. |
 
-If `n_low_soup_full_chi_cells` is 0, the library did not enter the low-soup full-χ path. A cells-only matrix uses `knee_umi` stored at `estimate_chi` time; it does not recompute the knee from rows that are no longer in the object.
+If `n_low_soup_full_chi_cells` is 0, the library did not enter the low-soup full-χ path. A cells-only matrix uses `knee_umi` stored for that same sample at `estimate_chi` time. A missing sample record turns the empty-consistent cap and the knee gate off. Another sample's `empty_umi` record is not used.
 
 Log lines go to the `ambidose` logger (stderr). Command output that is the result of the CLI (JSON, file paths, χ tables) stays on stdout.

@@ -102,8 +102,10 @@ def _write_rho_trust(
         # at all, so it defaulted to 0 for every mixture-derived cell
         # before ambidose_mixture_n_genes existed).
         mixture_genes = np.asarray(adata.obs["ambidose_mixture_n_genes"], dtype=np.int64)
-        if "ambidose_dose_disagreement" in adata.obs:
-            used_mixture = adata.obs["ambidose_dose_disagreement"].to_numpy(dtype=bool)
+        if "ambidose_dose_rule" in adata.obs:
+            # Blend is not the mixture estimate. Only mixture_high cells
+            # inherit mixture gene counts and the mixture fallback flag.
+            used_mixture = adata.obs["ambidose_dose_rule"].astype(str).to_numpy() == "mixture"
         elif not has_fixed_genes:
             # A standalone estimate_dose_mixture() run with no fixed pass
             # at all: every is_cell row's dose is the mixture one.
@@ -256,6 +258,7 @@ _INTERNAL_DENOISE_OBS = (
     "ambidose_dose_rho_gap",
     "ambidose_dose_disagreement",
     "ambidose_dose_diagnosis",
+    "ambidose_dose_rule",
     "ambidose_dose_selected",
     "ambidose_zero_dose_removed",
     "ambidose_trust_under_execution",

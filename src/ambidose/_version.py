@@ -4,7 +4,7 @@ from __future__ import annotations
 
 __all__ = ["__version__", "version", "version_tuple"]
 
-__version__ = "0.5.13"
+__version__ = "0.5.15"
 version = __version__
 
 _parts: list[int | str] = []

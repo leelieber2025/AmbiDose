@@ -1802,6 +1802,30 @@ def test_realloc_unspent_does_not_touch_protected_or_u():
     assert float(out.sum()) == pytest.approx(min(dose, float(observed[~is_u].sum())), rel=1e-6)
 
 
+def test_stored_empty_stats_ignores_other_samples(capsys):
+    from anndata import AnnData
+
+    from ambidose._shared import _sample_storage_id
+    from ambidose._subtract import _stored_empty_stats
+
+    adata = AnnData(sparse.csr_matrix([[1.0]]))
+    other = _sample_storage_id("s0")
+    mine = _sample_storage_id("s1")
+    adata.uns["ambidose"] = {
+        "empty_umi": {other: {"lam_e": 1.0e9, "knee_umi": 80.0, "sample": "s0"}}
+    }
+    lam, knee = _stored_empty_stats(adata, "s1")
+    assert lam == 0.0
+    assert knee == 0.0
+    err = capsys.readouterr().err
+    assert "s1" in err
+    assert "no stored empty_umi" in err
+    adata.uns["ambidose"]["empty_umi"][mine] = {"lam_e": 12.5, "knee_umi": 40.0, "sample": "s1"}
+    lam, knee = _stored_empty_stats(adata, "s1")
+    assert lam == 12.5
+    assert knee == 40.0
+
+
 def test_empty_phi_is_stored_on_chi():
     from ambidose.pp import estimate_chi
 

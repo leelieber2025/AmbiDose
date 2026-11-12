@@ -8,8 +8,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData, concat
 from scipy import sparse
+
+from ._shared import EMPTY_TYPES, _validated_type_values
 
 
 def make_toy(
@@ -173,9 +176,6 @@ def make_barnyard_toy(
     return adata
 
 
-_EMPTY_TYPES = frozenset({"none", "-1", ""})
-
-
 def _cell_mask(adata: AnnData) -> np.ndarray:
     if "droplet" in adata.obs:
         return adata.obs["droplet"].astype(str).to_numpy() == "cell"
@@ -264,19 +264,25 @@ def split_type_labels(
     n_splits: int = 2,
     seed: int = 0,
 ) -> AnnData:
-    """Split each true cell type into ``n_splits`` fake labels. Counts unchanged."""
+    """Split each true cell type into ``n_splits`` fake labels. Counts unchanged.
+
+    Missing values and blank strings are left as they are, matching
+    ``_validated_type_values``. Literal labels such as ``"none"`` and
+    ``"nan"`` are types.
+    """
     if n_splits < 2:
         raise ValueError("n_splits must be at least 2")
     if type_key not in adata.obs:
         raise KeyError(type_key)
     rng = np.random.default_rng(seed)
+    labels = _validated_type_values(adata, type_key).to_numpy()
     src = adata.obs[type_key].astype(str).to_numpy()
     out = src.copy()
     is_cell = _cell_mask(adata)
-    for t in np.unique(src[is_cell]):
-        if t in _EMPTY_TYPES:
-            continue
-        idx = np.flatnonzero(is_cell & (src == t))
+    cell_labels = labels[is_cell]
+    named = np.array([t not in EMPTY_TYPES for t in cell_labels], dtype=bool)
+    for t in pd.unique(cell_labels[named]):
+        idx = np.flatnonzero(is_cell & (labels == t))
         parts = rng.integers(0, n_splits, size=idx.size)
         out[idx] = np.array([f"{t}_s{int(k)}" for k in parts], dtype=object)
     adata.obs[key_added] = out
@@ -291,13 +297,18 @@ def merge_type_labels(
     key_added: str = "label_merged",
     merged_name: str = "merged",
 ) -> AnnData:
-    """Collapse every cell type into one label. Counts unchanged."""
+    """Collapse every cell type into one label. Counts unchanged.
+
+    Missing values and blank strings stay missing. Literal labels such as
+    ``"none"`` and ``"nan"`` are types.
+    """
     if type_key not in adata.obs:
         raise KeyError(type_key)
+    labels = _validated_type_values(adata, type_key).to_numpy()
     src = adata.obs[type_key].astype(str).to_numpy()
     out = src.copy()
     is_cell = _cell_mask(adata)
-    cell_types = is_cell & ~np.isin(src, list(_EMPTY_TYPES))
+    cell_types = is_cell & np.array([t not in EMPTY_TYPES for t in labels], dtype=bool)
     out[cell_types] = merged_name
     adata.obs[key_added] = out
     adata.uns["label_transform"] = "merge"
