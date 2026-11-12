@@ -45,7 +45,8 @@ def main():
     if os.path.exists(hist_path):
         with open(hist_path) as f:
             hist = json.load(f)
-    daily = hist.get("pypi_daily", {})
+    daily = dict(hist.get("pypi_daily", {}))
+    prev_daily = dict(daily)
     prev_pypi = int(hist.get("pypi_total", 0))
     prev_conda = int(hist.get("conda_total", 0))
 
@@ -71,6 +72,16 @@ def main():
     conda_total = max(conda_total, prev_conda)
 
     total = pypi_total + conda_total
+    # A new timestamp alone is not a new count. Leave the files untouched
+    # so a refresh that did not move the totals does not create a commit.
+    if (
+        pypi_total == prev_pypi
+        and conda_total == prev_conda
+        and int(hist.get("total", -1)) == total
+        and prev_daily == dict(sorted(daily.items()))
+    ):
+        print(f"{pkg}: unchanged pypi={pypi_total} conda={conda_total} total={total}")
+        return
     hist = {
         "package": pkg,
         "pypi_total": pypi_total,
