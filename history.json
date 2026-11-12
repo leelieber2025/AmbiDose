@@ -1,9 +1,9 @@
 {
  "package": "ambidose",
  "pypi_total": 8773,
- "conda_total": 7273,
- "total": 16046,
- "updated": "2026-11-12T02:31:53+00:00",
+ "conda_total": 7281,
+ "total": 16054,
+ "updated": "2026-11-12T15:23:30+00:00",
  "pypi_daily": {
   "2026-09-03": 595,
   "2026-09-04": 124,
